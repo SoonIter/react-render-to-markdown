@@ -14,12 +14,15 @@
   "scripts": {
     "prepare": "npm run build",
     "dev": "rslib build -w",
-    "build": "rslib build"
+    "build": "rslib build",
+    "test": "vitest run",
+    "format": "biome format"
   },
   "devDependencies": {
     "react": "^18.2.0",
     "react-reconciler": "^0.29.0",
     "vitest": "^3.2.4",
+    "@biomejs/biome": "^1.9.4",
     "@rslib/core": "0.15.1",
     "rsbuild-plugin-publint": "^0.3.3",
     "typescript": "^5.9.3",

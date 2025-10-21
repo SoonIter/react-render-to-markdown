@@ -1,7 +1,5 @@
 import createReconciler from 'react-reconciler';
-import {
-  DefaultEventPriority
-} from 'react-reconciler/constants.js';
+import { DefaultEventPriority } from 'react-reconciler/constants.js';
 
 const logger = {
   debug(...args: any[]): void {
@@ -104,7 +102,21 @@ export const state: {
 // Render completion flag
 
 // Create React Reconciler config
-const hostConfig: createReconciler.HostConfig<string, Props, MarkdownNode, MarkdownNode, TextNode, MarkdownNode, unknown, MarkdownNode | TextNode, HostContext, Props, unknown, unknown, -1> = {
+const hostConfig: createReconciler.HostConfig<
+  string,
+  Props,
+  MarkdownNode,
+  MarkdownNode,
+  TextNode,
+  MarkdownNode,
+  unknown,
+  MarkdownNode | TextNode,
+  HostContext,
+  Props,
+  unknown,
+  unknown,
+  -1
+> = {
   // Basic capabilities
   supportsMutation: true,
   supportsPersistence: false,

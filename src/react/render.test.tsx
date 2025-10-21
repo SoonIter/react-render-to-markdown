@@ -1,6 +1,6 @@
 import {
-  createContext,
   type ReactNode,
+  createContext,
   useContext,
   useEffect,
   useLayoutEffect,
@@ -26,10 +26,10 @@ describe('renderToMarkdownString', () => {
       return (
         <h1
           onClick={() => {
-            setCount(count => count + 1);
+            setCount((count) => count + 1);
           }}
         >
-          Header {count}  {children}
+          Header {count} {children}
         </h1>
       );
     };
@@ -45,20 +45,20 @@ describe('renderToMarkdownString', () => {
     const Comp3 = () => {
       return (
         <>
-          <Comp1>{<>children text</>}</Comp1>
+          <Comp1>{'children text'}</Comp1>
           <p>Paragraph</p>
         </>
       );
     };
     expect(await renderToMarkdownString(<Comp2 />)).toMatchInlineSnapshot(`
-      "# Header 1  
+      "# Header 1 
 
       Paragraph
 
       "
     `);
     expect(await renderToMarkdownString(<Comp3 />)).toMatchInlineSnapshot(`
-      "# Header 1  children text
+      "# Header 1 children text
 
       Paragraph
 
@@ -101,7 +101,7 @@ describe('renderToMarkdownString', () => {
     const Comp1 = ({ children }: { children?: ReactNode }) => {
       const [mounted, setMounted] = useState(false);
       useEffect(() => {
-        window.location.assign('about:blank'); 
+        window.location.assign('about:blank');
         setMounted(true);
       }, []);
       return (
@@ -165,14 +165,11 @@ describe('renderToMarkdownString', () => {
     function _createMdxContent() {
       return (
         <>
-          <>{'# Code Example\\n'}</>
+          {'# Code Example\\n'}
           {'\n'}
-          <>
-            {
-              // biome-ignore lint/suspicious/noTemplateCurlyInString: special case of ansi
-              '```tsx\n"console.log(\'Hello, world!\');\nfunction greet(name: string) {\n  return `Hello, \${name}!`;\n}"\n```\n'
-            }
-          </>
+          {
+            '```tsx\n"console.log(\'Hello, world!\');\nfunction greet(name: string) {\n  return `Hello, ${name}!`;\n}"\n```\n'
+          }
         </>
       );
     }

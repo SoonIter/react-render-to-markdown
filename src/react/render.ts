@@ -1,4 +1,4 @@
-import { MarkdownNode, reconciler, TextNode } from './reconciler.js';
+import { MarkdownNode, TextNode, reconciler } from './reconciler.js';
 
 // Convert node tree to Markdown string
 function toMarkdown(root: MarkdownNode): string {
@@ -6,7 +6,7 @@ function toMarkdown(root: MarkdownNode): string {
 
   // Get children's Markdown
   const childrenMd = children
-    .map(child => {
+    .map((child) => {
       if (child instanceof TextNode) {
         return child.text;
       }
@@ -72,7 +72,7 @@ function toMarkdown(root: MarkdownNode): string {
     case 'tr': {
       const cells = children
         .filter((child): child is MarkdownNode => child instanceof MarkdownNode)
-        .map(cell => toMarkdown(cell).trim());
+        .map((cell) => toMarkdown(cell).trim());
 
       // If it's a header row, add separator
       if (root.parent && root.parent.type === 'thead') {
@@ -85,15 +85,6 @@ function toMarkdown(root: MarkdownNode): string {
     case 'th':
     case 'td':
       return childrenMd;
-    case 'div':
-    case 'span':
-    case 'section':
-    case 'article':
-    case 'main':
-    case 'aside':
-    case 'header':
-    case 'footer':
-    case 'nav':
     default:
       return childrenMd;
   }
@@ -122,7 +113,8 @@ export async function renderToMarkdownString(
 
   // Set up a promise that resolves when commit completes
   let resolveCommit: ((arg: string) => void) | null = null;
-  const commitPromise = new Promise<string>(resolve => {
+  let resolved = false;
+  const commitPromise = new Promise<string>((resolve) => {
     resolveCommit = resolve;
   });
 
@@ -131,19 +123,25 @@ export async function renderToMarkdownString(
       // This callback is called after commit
       try {
         const markdownString = toMarkdown(container);
-        if (resolveCommit) {
+        if (resolveCommit && !resolved) {
+          resolved = true;
           resolveCommit(markdownString || '');
         }
       } catch (error) {
         throw new Error(
-          'Error in commit callback: ' + (error as Error).message,
+          `Error in commit callback: ${(error as Error).message}`,
         );
       }
     });
     reconciler.flushSync();
     return commitPromise;
   } catch (error) {
-    console.log('Error in updateContainer:', error);
+    if (process.env.DEBUG) {
+      console.log('Error in updateContainer:', error);
+    }
+    if (resolved) {
+      return commitPromise;
+    }
     return '';
   }
 }
