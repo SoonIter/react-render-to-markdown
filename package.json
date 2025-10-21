@@ -1,6 +1,6 @@
 {
   "name": "react-render-to-markdown",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "render React components to Markdown strings for SSG-MD",
   "repository": "https://github.com/SoonIter/react-render-to-markdown",
   "type": "module",
@@ -11,7 +11,9 @@
       "require": "./dist/index.cjs"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "bump": "npx bumpp",
     "prepare": "simple-git-hooks && npm run build",
@@ -43,11 +45,17 @@
   "peerDependencies": {
     "react": ">=18.2.0"
   },
-  "keywords": ["react", "markdown", "renderer", "react-reconciler"],
+  "keywords": [
+    "react",
+    "markdown",
+    "renderer",
+    "react-reconciler"
+  ],
   "author": "SoonIter <sooniter@gmail.com>",
   "license": "MIT",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
-  }
+  },
+  "packageManager": "pnpm@8.15.4+sha256.cea6d0bdf2de3a0549582da3983c70c92ffc577ff4410cbf190817ddc35137c2"
 }
