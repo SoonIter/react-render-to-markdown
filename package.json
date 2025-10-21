@@ -42,7 +42,7 @@
   "peerDependencies": {
     "react": ">=18.2.0"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC"
+  "keywords": ["react", "markdown", "renderer", "react-reconciler"],
+  "author": "SoonIter <sooniter@gmail.com>",
+  "license": "MIT"
 }
