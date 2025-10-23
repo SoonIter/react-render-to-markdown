@@ -1,10 +1,10 @@
 {
   "name": "react-render-to-markdown",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "render React components to Markdown strings for SSG-MD",
   "repository": {
     "type": "git",
-    "url": "https://github.com/SoonIter/react-render-to-markdown"
+    "url": "git+https://github.com/SoonIter/react-render-to-markdown"
   },
   "type": "module",
   "exports": {
