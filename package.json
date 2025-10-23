@@ -14,9 +14,7 @@
       "require": "./dist/index.cjs"
     }
   },
-  "files": [
-    "dist"
-  ],
+  "files": ["dist"],
   "scripts": {
     "bump": "npx bumpp",
     "prepare": "simple-git-hooks && npm run build",
@@ -48,12 +46,7 @@
   "peerDependencies": {
     "react": ">=18.2.0"
   },
-  "keywords": [
-    "react",
-    "markdown",
-    "renderer",
-    "react-reconciler"
-  ],
+  "keywords": ["react", "markdown", "renderer", "react-reconciler"],
   "author": "SoonIter <sooniter@gmail.com>",
   "license": "MIT",
   "publishConfig": {
