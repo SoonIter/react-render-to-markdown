@@ -22,6 +22,10 @@ npm install react-render-to-markdown
 }
 ```
 
+## Used By
+
+- [Rspress SSG-MD](https://rspress.rs/guide/basic/ssg-md) — Rspress uses this library to power its SSG-MD feature, which renders documentation pages as Markdown files instead of HTML. This enables Generative Engine Optimization (GEO) by generating `llms.txt` and `llms-full.txt` for better Agent accessibility.
+
 ## License
 
 MIT License.
