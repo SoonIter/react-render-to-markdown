@@ -1,4 +1,112 @@
+import React from 'react';
 import { MarkdownNode, TextNode, reconciler } from './reconciler.js';
+
+// Access React internals to intercept the hooks dispatcher.
+// React 18: __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentDispatcher.current
+// React's Fizz server renderer (renderToString) sets useEffect/useLayoutEffect
+// to noop in its HooksDispatcher. We replicate this by intercepting the
+// ReactCurrentDispatcher.current property during our render pass.
+const ReactSharedInternals: Record<string, unknown> | null = (
+  React as Record<string, unknown>
+).__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED as Record<
+  string,
+  unknown
+> | null;
+
+function noop(): void {}
+
+/**
+ * Intercept the React hooks dispatcher so that useEffect, useLayoutEffect,
+ * and useInsertionEffect become no-ops — matching React Fizz SSR behavior.
+ *
+ * Uses a refcount so multiple concurrent renderToMarkdownString calls
+ * (e.g. via p-map) safely share a single interceptor and only restore the
+ * original descriptor when the last render completes.
+ *
+ * Returns a cleanup function that decrements the refcount.
+ */
+let interceptorRefCount = 0;
+let originalDescriptor: PropertyDescriptor | undefined;
+let realCurrent: Record<string, unknown> | null = null;
+let cachedTarget: unknown = null;
+let cachedProxy: unknown = null;
+
+function installEffectInterceptor(): () => void {
+  if (!ReactSharedInternals) {
+    return noop;
+  }
+
+  const ReactCurrentDispatcher =
+    ReactSharedInternals.ReactCurrentDispatcher as Record<
+      string,
+      unknown
+    > | null;
+  if (!ReactCurrentDispatcher) {
+    return noop;
+  }
+
+  interceptorRefCount++;
+  if (interceptorRefCount === 1) {
+    // First caller — save the original descriptor and install the interceptor.
+    originalDescriptor = Object.getOwnPropertyDescriptor(
+      ReactCurrentDispatcher,
+      'current',
+    );
+    realCurrent = ReactCurrentDispatcher.current as Record<
+      string,
+      unknown
+    > | null;
+    cachedTarget = null;
+    cachedProxy = null;
+
+    Object.defineProperty(ReactCurrentDispatcher, 'current', {
+      get() {
+        if (realCurrent == null) {
+          return realCurrent;
+        }
+        // Cache the proxy per dispatcher identity to avoid creating a new one
+        // on every property access.
+        if (cachedTarget !== realCurrent) {
+          cachedTarget = realCurrent;
+          cachedProxy = new Proxy(realCurrent, {
+            get(target, prop, receiver) {
+              if (
+                prop === 'useEffect' ||
+                prop === 'useLayoutEffect' ||
+                prop === 'useInsertionEffect'
+              ) {
+                return noop;
+              }
+              return Reflect.get(target, prop, receiver);
+            },
+          });
+        }
+        return cachedProxy;
+      },
+      set(value) {
+        realCurrent = value;
+      },
+      configurable: true,
+    });
+  }
+
+  return () => {
+    interceptorRefCount--;
+    if (interceptorRefCount === 0) {
+      // Last caller — restore the original property descriptor.
+      if (originalDescriptor) {
+        Object.defineProperty(
+          ReactCurrentDispatcher,
+          'current',
+          originalDescriptor,
+        );
+      } else {
+        (ReactCurrentDispatcher as Record<string, unknown>).current = undefined;
+        ReactCurrentDispatcher.current = realCurrent;
+      }
+    }
+  };
+}
 
 // Convert node tree to Markdown string
 function toMarkdown(root: MarkdownNode): string {
@@ -39,10 +147,23 @@ function toMarkdown(root: MarkdownNode): string {
     case 'i':
       return `*${childrenMd}*`;
     case 'code':
+      // When <code> is nested inside <pre>, it represents the code block body,
+      // so we must not wrap it with inline backticks (would create nested fences).
+      if (root.parent?.type === 'pre') {
+        return childrenMd;
+      }
       return `\`${childrenMd}\``;
     case 'pre': {
-      const language = props.lang || props.language || '';
-      return `\`\`\`${language}\n${childrenMd}\n\`\`\`\n\n`;
+      const _language =
+        props['data-lang'] || props.language || props.lang || '';
+
+      const language = typeof _language === 'string' ? _language : '';
+      const title = props['data-title'] || '';
+      const block = ['markdown', 'mdx', 'md', ''].includes(language)
+        ? '````'
+        : '```';
+
+      return `\n${block}${language}${title ? ` title=${title}` : ''}\n${childrenMd}\n${block}\n`;
     }
     case 'a':
       return `[${childrenMd}](${props.href || '#'})`;
@@ -105,43 +226,33 @@ export async function renderToMarkdownString(
     '', // identifierPrefix
     (error: Error) => {
       if (process.env.DEBUG) {
-        console.log('Reconciler onRecoverableError:', error);
+        console.error('Reconciler onRecoverableError:', error);
       }
     }, // onRecoverableError
     null, // transitionCallbacks
   );
 
-  // Set up a promise that resolves when commit completes
-  let resolveCommit: ((arg: string) => void) | null = null;
-  let resolved = false;
-  const commitPromise = new Promise<string>((resolve) => {
-    resolveCommit = resolve;
-  });
+  // Intercept the React hooks dispatcher to make useEffect / useLayoutEffect
+  // / useInsertionEffect no-ops, matching React Fizz SSR behavior.
+  const removeInterceptor = installEffectInterceptor();
 
   try {
+    // Set up a promise that resolves when commit completes
+    let resolveCommit: ((arg: string) => void) | null = null;
+    const commitPromise = new Promise<string>((resolve) => {
+      resolveCommit = resolve;
+    });
+
     reconciler.updateContainer(element, root, null, () => {
       // This callback is called after commit
-      try {
-        const markdownString = toMarkdown(container);
-        if (resolveCommit && !resolved) {
-          resolved = true;
-          resolveCommit(markdownString || '');
-        }
-      } catch (error) {
-        throw new Error(
-          `Error in commit callback: ${(error as Error).message}`,
-        );
+      if (resolveCommit) {
+        resolveCommit(toMarkdown(container));
       }
     });
+
     reconciler.flushSync();
-    return commitPromise;
-  } catch (error) {
-    if (process.env.DEBUG) {
-      console.log('Error in updateContainer:', error);
-    }
-    if (resolved) {
-      return commitPromise;
-    }
-    return '';
+    return await commitPromise;
+  } finally {
+    removeInterceptor();
   }
 }

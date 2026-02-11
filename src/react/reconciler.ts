@@ -1,14 +1,6 @@
 import createReconciler from 'react-reconciler';
 import { DefaultEventPriority } from 'react-reconciler/constants.js';
 
-const logger = {
-  debug(...args: any[]): void {
-    if (process.env.DEBUG) {
-      console.log.apply(console, args);
-    }
-  },
-} as const;
-
 // Define types
 type ElementNames = string;
 type Props = Record<string, unknown>;
@@ -45,23 +37,10 @@ export class MarkdownNode {
   }
 
   appendChild(child: MarkdownNode | TextNode): void {
-    logger.debug('MarkdownNode.appendChild called: %O', {
-      parentType: this.type,
-      childType:
-        child instanceof TextNode
-          ? `TextNode("${child.text}")`
-          : `MarkdownNode(${child.type})`,
-      childrenBefore: this.children.length,
-    });
-
     this.children.push(child);
     if ('parent' in child) {
       child.parent = this;
     }
-
-    logger.debug('MarkdownNode.appendChild completed: %O', {
-      childrenAfter: this.children.length,
-    });
   }
 
   removeChild(child: MarkdownNode | TextNode): void {
@@ -87,20 +66,6 @@ export class MarkdownNode {
   }
 }
 
-// Current update priority
-// let currentUpdatePriority = IdleEventPriority;
-// Last rendered result
-export const state: {
-  lastRootNode: MarkdownNode | null;
-  _renderCompleted: boolean;
-  _result: string | null;
-} = {
-  lastRootNode: null,
-  _renderCompleted: false,
-  _result: null,
-};
-// Render completion flag
-
 // Create React Reconciler config
 const hostConfig: createReconciler.HostConfig<
   string,
@@ -112,7 +77,7 @@ const hostConfig: createReconciler.HostConfig<
   unknown,
   MarkdownNode | TextNode,
   HostContext,
-  Props,
+  UpdatePayload,
   unknown,
   unknown,
   -1
@@ -122,8 +87,6 @@ const hostConfig: createReconciler.HostConfig<
   supportsPersistence: false,
   supportsHydration: false,
   isPrimaryRenderer: false,
-
-  supportsMicrotasks: false,
 
   // Get root host context
   getRootHostContext(): HostContext {
@@ -140,12 +103,6 @@ const hostConfig: createReconciler.HostConfig<
     const isInsideText =
       type === 'text' || type === 'span' || previousIsInsideText;
 
-    logger.debug('getChildHostContext: %O', {
-      type,
-      previousIsInsideText,
-      isInsideText,
-    });
-
     if (previousIsInsideText === isInsideText) {
       return parentHostContext;
     }
@@ -155,32 +112,22 @@ const hostConfig: createReconciler.HostConfig<
 
   // Create instance
   createInstance(type: string, props: Props): MarkdownNode {
-    logger.debug('createInstance: %O', { type, props });
     return new MarkdownNode(type, props);
   },
 
   // Create text instance
   createTextInstance(text: string): TextNode {
-    logger.debug('createTextInstance: %O', { text });
     return new TextNode(text);
   },
 
   // Determine whether to set text content directly
-  shouldSetTextContent(type: string, props: Props): boolean {
-    logger.debug('shouldSetTextContent: %O', { type, props });
+  shouldSetTextContent(_type: string, _props: Props): boolean {
     // For simple text content, return false so React creates a text node
     return false;
   },
 
   // Append child
   appendChild(parent: MarkdownNode, child: MarkdownNode | TextNode): void {
-    logger.debug('appendChild: %O', {
-      parent: parent.type,
-      child:
-        child instanceof TextNode
-          ? `TextNode("${child.text}")`
-          : `MarkdownNode(${child.type})`,
-    });
     parent.appendChild(child);
   },
 
@@ -190,11 +137,6 @@ const hostConfig: createReconciler.HostConfig<
     child: MarkdownNode | TextNode,
     beforeChild: MarkdownNode | TextNode,
   ): void {
-    logger.debug('insertBefore: %O', {
-      parent: parent.type,
-      child,
-      beforeChild,
-    });
     parent.insertBefore(child, beforeChild);
   },
 
@@ -213,15 +155,12 @@ const hostConfig: createReconciler.HostConfig<
   },
 
   // Prepare update
-  // Return null to indicate no update needed, or an update payload object
   prepareUpdate(
     _instance: MarkdownNode,
     _type: string,
     _oldProps: Props,
     _newProps: Props,
   ): UpdatePayload | null {
-    // For SSR-like rendering, we always return the new props as update payload
-    // This ensures props changes are committed
     return _newProps;
   },
 
@@ -244,40 +183,22 @@ const hostConfig: createReconciler.HostConfig<
     return false;
   },
 
+  // Commit mount - explicitly no-op to prevent lifecycle methods
+  // This prevents componentDidMount from being called (SSR behavior)
+  commitMount(): void {
+    // No-op: In SSR/static rendering, we don't want lifecycle methods to run
+  },
+
   // Clear container
   clearContainer(container: MarkdownNode): void {
     container.children = [];
   },
-
-  // Handle update priority
-  // setCurrentUpdatePriority(newPriority: number): void {
-  //   currentUpdatePriority = newPriority;
-  // },
-  // setprivate
-
-  // getCurrentUpdatePriority(): number {
-  //   return currentUpdatePriority;
-  // },
-
-  // resolveUpdatePriority(): number {
-  //   if (currentUpdatePriority !== IdleEventPriority) {
-  //     return currentUpdatePriority;
-  //   }
-  //   return DefaultEventPriority;
-  // },
 
   // Append initial child
   appendInitialChild(
     parent: MarkdownNode,
     child: MarkdownNode | TextNode,
   ): void {
-    logger.debug('appendInitialChild: %O', {
-      parent: parent.type,
-      child:
-        child instanceof TextNode
-          ? `TextNode("${child.text}")`
-          : `MarkdownNode(${child.type})`,
-    });
     parent.appendChild(child);
   },
 
@@ -291,18 +212,9 @@ const hostConfig: createReconciler.HostConfig<
     return instance;
   },
   prepareForCommit(_containerInfo: MarkdownNode): null {
-    logger.debug('prepareForCommit called');
     return null;
   },
-  resetAfterCommit(containerInfo: MarkdownNode): void {
-    logger.debug('resetAfterCommit called, containerInfo: %O', containerInfo);
-    logger.debug(
-      'resetAfterCommit containerInfo.children: %O',
-      containerInfo.children,
-    );
-    state.lastRootNode = containerInfo;
-    state._renderCompleted = true;
-  },
+  resetAfterCommit(_containerInfo: MarkdownNode): void {},
   // Use real setTimeout/clearTimeout to allow React to schedule work properly
   // Effects will still be scheduled, but we'll read the result before they execute
   scheduleTimeout: setTimeout,
@@ -327,13 +239,6 @@ const hostConfig: createReconciler.HostConfig<
     container: MarkdownNode,
     child: MarkdownNode | TextNode,
   ): void {
-    logger.debug('appendChildToContainer: %O', {
-      container: container.type,
-      child:
-        child instanceof TextNode
-          ? `TextNode("${child.text}")`
-          : `MarkdownNode(${child.type})`,
-    });
     container.appendChild(child);
   },
 
@@ -342,11 +247,6 @@ const hostConfig: createReconciler.HostConfig<
     child: MarkdownNode | TextNode,
     beforeChild: MarkdownNode | TextNode,
   ): void {
-    logger.debug('insertInContainerBefore: %O', {
-      container: container.type,
-      child,
-      beforeChild,
-    });
     container.insertBefore(child, beforeChild);
   },
 
@@ -354,10 +254,6 @@ const hostConfig: createReconciler.HostConfig<
     container: MarkdownNode,
     child: MarkdownNode | TextNode,
   ): void {
-    logger.debug('removeChildFromContainer: %O', {
-      container: container.type,
-      child,
-    });
     container.removeChild(child);
   },
 
@@ -376,49 +272,6 @@ const hostConfig: createReconciler.HostConfig<
   unhideTextInstance(textInstance: TextNode, text: string): void {
     textInstance.setText(text);
   },
-
-  // React 18+ additional methods
-  // maySuspendCommit(): boolean {
-  //   return false;
-  // },
-
-  // preloadInstance(): boolean {
-  //   return true;
-  // },
-
-  // startSuspendingCommit(): void {},
-
-  // suspendInstance(): void {},
-
-  // waitForCommitToBeReady(): null {
-  //   return null;
-  // },
-
-  // eslint-disable-next-line @typescript-eslint/naming-convention
-  // NotPendingTransition: null as unknown,
-
-  // eslint-disable-next-line @typescript-eslint/naming-convention
-  // HostTransitionContext: createContext(
-  //   null,
-  // ) as unknown as ReactContext<unknown>,
-
-  // resetFormInstance(): void {},
-
-  // requestPostPaintCallback(): void {},
-
-  // shouldAttemptEagerTransition(): boolean {
-  //   return false;
-  // },
-
-  // trackSchedulerEvent(): void {},
-
-  // resolveEventType(): null {
-  //   return null;
-  // },
-
-  // resolveEventTimeStamp(): number {
-  //   return -1.1;
-  // },
 };
 
 // Create reconciler instance
