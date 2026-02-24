@@ -1,4 +1,4 @@
-import {
+import React, {
   type ReactNode,
   createContext,
   useContext,
@@ -169,6 +169,23 @@ describe('renderToMarkdownString', () => {
   // In React 18, class component lifecycle methods are invoked directly
   // by the reconciler during commitLayoutEffects, not through the hooks
   // dispatcher, so they cannot be intercepted.
+
+  it('componentDidMount', async () => {
+    class Base extends React.Component {
+      state: Readonly<{ mounted: boolean }> = { mounted: false };
+      render(): React.ReactNode {
+        return <div>Base {this.state.mounted}</div>;
+      }
+      componentDidMount(): void {
+        window.location.assign('about:blank');
+        this.setState({ mounted: true });
+      }
+    }
+
+    expect(await renderToMarkdownString(<Base />)).toMatchInlineSnapshot(
+      `"Base "`,
+    );
+  });
 
   it('text-indent of code', async () => {
     function _createMdxContent() {

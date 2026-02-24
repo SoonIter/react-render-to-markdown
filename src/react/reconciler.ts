@@ -1,5 +1,9 @@
-import createReconciler from 'react-reconciler';
-import { DefaultEventPriority } from 'react-reconciler/constants.js';
+import { createContext } from 'react';
+import createReconciler, { type ReactContext } from 'react-reconciler';
+import {
+  DefaultEventPriority,
+  NoEventPriority,
+} from 'react-reconciler/constants.js';
 
 // Define types
 type ElementNames = string;
@@ -7,7 +11,6 @@ type Props = Record<string, unknown>;
 type HostContext = {
   isInsideText: boolean;
 };
-type UpdatePayload = Props;
 
 // Text node class
 export class TextNode {
@@ -66,6 +69,9 @@ export class MarkdownNode {
   }
 }
 
+// Current update priority
+let currentUpdatePriority = NoEventPriority;
+
 // Create React Reconciler config
 const hostConfig: createReconciler.HostConfig<
   string,
@@ -75,12 +81,13 @@ const hostConfig: createReconciler.HostConfig<
   TextNode,
   MarkdownNode,
   unknown,
-  MarkdownNode | TextNode,
+  unknown,
+  unknown,
   HostContext,
-  UpdatePayload,
   unknown,
   unknown,
-  -1
+  unknown,
+  unknown
 > = {
   // Basic capabilities
   supportsMutation: true,
@@ -154,27 +161,16 @@ const hostConfig: createReconciler.HostConfig<
     textInstance.setText(newText);
   },
 
-  // Prepare update
-  prepareUpdate(
-    _instance: MarkdownNode,
-    _type: string,
-    _oldProps: Props,
-    _newProps: Props,
-  ): UpdatePayload | null {
-    return _newProps;
-  },
-
   // Commit update
   commitUpdate(
     instance: MarkdownNode,
-    updatePayload: UpdatePayload,
     _type: string,
     _oldProps: Props,
-    _newProps: Props,
+    newProps: Props,
     _internalHandle: unknown,
   ): void {
     // Update instance props with new props
-    instance.props = updatePayload;
+    instance.props = newProps;
   },
 
   // Finalize initial children
@@ -192,6 +188,22 @@ const hostConfig: createReconciler.HostConfig<
   // Clear container
   clearContainer(container: MarkdownNode): void {
     container.children = [];
+  },
+
+  // Handle update priority
+  setCurrentUpdatePriority(newPriority: number): void {
+    currentUpdatePriority = newPriority;
+  },
+
+  getCurrentUpdatePriority(): number {
+    return currentUpdatePriority;
+  },
+
+  resolveUpdatePriority(): number {
+    if (currentUpdatePriority !== NoEventPriority) {
+      return currentUpdatePriority;
+    }
+    return DefaultEventPriority;
   },
 
   // Append initial child
@@ -219,10 +231,11 @@ const hostConfig: createReconciler.HostConfig<
   // Effects will still be scheduled, but we'll read the result before they execute
   scheduleTimeout: setTimeout,
   cancelTimeout: clearTimeout,
-  noTimeout: -1 as const,
-  getCurrentEventPriority(): number {
-    return DefaultEventPriority;
-  },
+  noTimeout: -1,
+  scheduleMicrotask:
+    typeof queueMicrotask === 'function'
+      ? queueMicrotask
+      : (fn: () => unknown) => Promise.resolve().then(fn),
   getInstanceFromNode(): null {
     return null;
   },
@@ -272,6 +285,47 @@ const hostConfig: createReconciler.HostConfig<
   unhideTextInstance(textInstance: TextNode, text: string): void {
     textInstance.setText(text);
   },
+
+  // React 19 additional methods
+  maySuspendCommit(): boolean {
+    return false;
+  },
+
+  preloadInstance(): boolean {
+    return true;
+  },
+
+  startSuspendingCommit(): void {},
+
+  suspendInstance(): void {},
+
+  waitForCommitToBeReady(): null {
+    return null;
+  },
+
+  NotPendingTransition: null as unknown,
+
+  HostTransitionContext: createContext(
+    null,
+  ) as unknown as ReactContext<unknown>,
+
+  resetFormInstance(): void {},
+
+  requestPostPaintCallback(): void {},
+
+  shouldAttemptEagerTransition(): boolean {
+    return false;
+  },
+
+  trackSchedulerEvent(): void {},
+
+  resolveEventType(): null {
+    return null;
+  },
+
+  resolveEventTimeStamp(): number {
+    return -1.1;
+  },
 };
 
 // Create reconciler instance
@@ -283,10 +337,11 @@ export const reconciler = createReconciler<
   TextNode,
   MarkdownNode,
   unknown,
-  MarkdownNode | TextNode,
+  unknown,
+  unknown,
   HostContext,
-  UpdatePayload,
   unknown,
   unknown,
-  -1
+  unknown,
+  unknown
 >(hostConfig);

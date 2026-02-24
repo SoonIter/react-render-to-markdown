@@ -1,14 +1,16 @@
 import React from 'react';
-import { MarkdownNode, TextNode, reconciler } from './reconciler.js';
+import { MarkdownNode, reconciler, TextNode } from './reconciler.js';
 
 // Access React internals to intercept the hooks dispatcher.
-// React 18: __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentDispatcher.current
+// React 19: __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE.H
 // React's Fizz server renderer (renderToString) sets useEffect/useLayoutEffect
-// to noop in its HooksDispatcher. We replicate this by intercepting the
-// ReactCurrentDispatcher.current property during our render pass.
+// to noop in its HooksDispatcher. We replicate this by intercepting the H
+// property on ReactSharedInternals during our render pass.
+// https://github.com/facebook/react/blob/c3b0e20e4/packages/react/src/ReactSharedInternals.js
+// https://github.com/facebook/react/blob/c3b0e20e4/packages/react-server/src/ReactFizzHooks.js#L817-L822
 const ReactSharedInternals: Record<string, unknown> | null = (
   React as Record<string, unknown>
-).__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED as Record<
+).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE as Record<
   string,
   unknown
 > | null;
@@ -27,7 +29,7 @@ function noop(): void {}
  */
 let interceptorRefCount = 0;
 let originalDescriptor: PropertyDescriptor | undefined;
-let realCurrent: Record<string, unknown> | null = null;
+let realH: Record<string, unknown> | null = null;
 let cachedTarget: unknown = null;
 let cachedProxy: unknown = null;
 
@@ -36,39 +38,27 @@ function installEffectInterceptor(): () => void {
     return noop;
   }
 
-  const ReactCurrentDispatcher =
-    ReactSharedInternals.ReactCurrentDispatcher as Record<
-      string,
-      unknown
-    > | null;
-  if (!ReactCurrentDispatcher) {
-    return noop;
-  }
-
   interceptorRefCount++;
   if (interceptorRefCount === 1) {
     // First caller — save the original descriptor and install the interceptor.
     originalDescriptor = Object.getOwnPropertyDescriptor(
-      ReactCurrentDispatcher,
-      'current',
+      ReactSharedInternals,
+      'H',
     );
-    realCurrent = ReactCurrentDispatcher.current as Record<
-      string,
-      unknown
-    > | null;
+    realH = ReactSharedInternals.H as Record<string, unknown> | null;
     cachedTarget = null;
     cachedProxy = null;
 
-    Object.defineProperty(ReactCurrentDispatcher, 'current', {
+    Object.defineProperty(ReactSharedInternals, 'H', {
       get() {
-        if (realCurrent == null) {
-          return realCurrent;
+        if (realH == null) {
+          return realH;
         }
         // Cache the proxy per dispatcher identity to avoid creating a new one
         // on every property access.
-        if (cachedTarget !== realCurrent) {
-          cachedTarget = realCurrent;
-          cachedProxy = new Proxy(realCurrent, {
+        if (cachedTarget !== realH) {
+          cachedTarget = realH;
+          cachedProxy = new Proxy(realH, {
             get(target, prop, receiver) {
               if (
                 prop === 'useEffect' ||
@@ -84,7 +74,7 @@ function installEffectInterceptor(): () => void {
         return cachedProxy;
       },
       set(value) {
-        realCurrent = value;
+        realH = value;
       },
       configurable: true,
     });
@@ -95,14 +85,10 @@ function installEffectInterceptor(): () => void {
     if (interceptorRefCount === 0) {
       // Last caller — restore the original property descriptor.
       if (originalDescriptor) {
-        Object.defineProperty(
-          ReactCurrentDispatcher,
-          'current',
-          originalDescriptor,
-        );
+        Object.defineProperty(ReactSharedInternals, 'H', originalDescriptor);
       } else {
-        (ReactCurrentDispatcher as Record<string, unknown>).current = undefined;
-        ReactCurrentDispatcher.current = realCurrent;
+        delete (ReactSharedInternals as Record<string, unknown>).H;
+        ReactSharedInternals.H = realH;
       }
     }
   };
@@ -219,17 +205,25 @@ export async function renderToMarkdownString(
 
   const root = reconciler.createContainer(
     container,
-    0, // tag (LegacyRoot = 0)
+    1, // tag (ConcurrentRoot = 1)
     null, // hydrationCallbacks
     false, // isStrictMode
     false, // concurrentUpdatesByDefaultOverride
     '', // identifierPrefix
-    (error: Error) => {
+    (error, info) => {
       if (process.env.DEBUG) {
-        console.error('Reconciler onRecoverableError:', error);
+        console.error('Reconciler Error:', error, info);
+        const message = `Reconciler Error:${error.message}`;
+        throw new Error(message);
+      }
+    }, // onUncaughtError
+    () => {}, // onCaughtError
+    (...args) => {
+      if (process.env.DEBUG) {
+        console.log('Reconciler onRecoverable Error:', ...args);
       }
     }, // onRecoverableError
-    null, // transitionCallbacks
+    () => {}, // onDefaultTransitionIndicator
   );
 
   // Intercept the React hooks dispatcher to make useEffect / useLayoutEffect
@@ -250,7 +244,6 @@ export async function renderToMarkdownString(
       }
     });
 
-    reconciler.flushSync();
     return await commitPromise;
   } finally {
     removeInterceptor();
