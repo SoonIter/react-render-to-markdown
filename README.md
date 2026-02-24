@@ -9,8 +9,14 @@ Built on top of `react-reconciler`, this library creates a custom React renderer
 
 ## Installation
 
+The major version of `react-render-to-markdown` follows the React version. Install the one that matches your project:
+
 ```bash
-npm install react-render-to-markdown
+# React 19
+npm install react-render-to-markdown@19
+
+# React 18
+npm install react-render-to-markdown@18
 ```
 
 ## Quick Start

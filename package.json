@@ -1,6 +1,6 @@
 {
   "name": "react-render-to-markdown",
-  "version": "19.0.0",
+  "version": "19.0.1",
   "description": "render React components to Markdown strings for SSG-MD",
   "repository": {
     "type": "git",

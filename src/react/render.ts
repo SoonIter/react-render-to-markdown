@@ -1,5 +1,5 @@
 import React from 'react';
-import { MarkdownNode, reconciler, TextNode } from './reconciler.js';
+import { MarkdownNode, TextNode, reconciler } from './reconciler.js';
 
 // Access React internals to intercept the hooks dispatcher.
 // React 19: __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE.H
@@ -87,7 +87,7 @@ function installEffectInterceptor(): () => void {
       if (originalDescriptor) {
         Object.defineProperty(ReactSharedInternals, 'H', originalDescriptor);
       } else {
-        delete (ReactSharedInternals as Record<string, unknown>).H;
+        (ReactSharedInternals as Record<string, unknown>).H = undefined;
         ReactSharedInternals.H = realH;
       }
     }
