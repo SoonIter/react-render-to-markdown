@@ -33,6 +33,40 @@ let realH: Record<string, unknown> | null = null;
 let cachedTarget: unknown = null;
 let cachedProxy: unknown = null;
 
+const transparentBlockTypes = new Set([
+  'address',
+  'article',
+  'aside',
+  'details',
+  'div',
+  'figcaption',
+  'figure',
+  'footer',
+  'form',
+  'header',
+  'main',
+  'nav',
+  'section',
+  'summary',
+]);
+
+const markdownBlockTypes = new Set([
+  'blockquote',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'hr',
+  'li',
+  'ol',
+  'p',
+  'pre',
+  'table',
+  'ul',
+]);
+
 function installEffectInterceptor(): () => void {
   if (!ReactSharedInternals) {
     return noop;
@@ -94,52 +128,138 @@ function installEffectInterceptor(): () => void {
   };
 }
 
+function isFlowContainer(type: string): boolean {
+  return type === 'root' || transparentBlockTypes.has(type);
+}
+
+function isBlockBoundary(child: MarkdownNode | TextNode): boolean {
+  return (
+    child instanceof MarkdownNode &&
+    (transparentBlockTypes.has(child.type) ||
+      markdownBlockTypes.has(child.type))
+  );
+}
+
+function startsWithNewline(value: string): boolean {
+  return value.charCodeAt(0) === 10;
+}
+
+function endsWithNewline(value: string): boolean {
+  return value.charCodeAt(value.length - 1) === 10;
+}
+
+function hasBlankLineBoundary(
+  previousMarkdown: string,
+  markdown: string,
+): boolean {
+  return (
+    previousMarkdown.endsWith('\n\n') ||
+    markdown.startsWith('\n\n') ||
+    (endsWithNewline(previousMarkdown) && startsWithNewline(markdown))
+  );
+}
+
+function getBlockSeparator(
+  previousChild: MarkdownNode | TextNode,
+  child: MarkdownNode | TextNode,
+  previousMarkdown: string,
+  markdown: string,
+): string {
+  if (
+    previousMarkdown.length === 0 ||
+    markdown.length === 0 ||
+    (!isBlockBoundary(previousChild) && !isBlockBoundary(child)) ||
+    hasBlankLineBoundary(previousMarkdown, markdown)
+  ) {
+    return '';
+  }
+
+  if (endsWithNewline(previousMarkdown) || startsWithNewline(markdown)) {
+    return '\n';
+  }
+
+  return '\n\n';
+}
+
+function childToMarkdown(child: MarkdownNode | TextNode): string {
+  if (child instanceof TextNode) {
+    return child.text;
+  }
+  return toMarkdown(child);
+}
+
+function renderChildren(root: MarkdownNode): string {
+  const { children } = root;
+
+  if (children.length === 0) {
+    return '';
+  }
+
+  const shouldSeparateBlocks = isFlowContainer(root.type);
+  const parts: string[] = [];
+  let previousChild: MarkdownNode | TextNode | undefined;
+  let previousMarkdown = '';
+
+  for (const child of children) {
+    const markdown = childToMarkdown(child);
+    const separator =
+      shouldSeparateBlocks && previousChild
+        ? getBlockSeparator(previousChild, child, previousMarkdown, markdown)
+        : '';
+
+    if (separator) {
+      parts.push(separator);
+    }
+
+    parts.push(markdown);
+
+    if (markdown.length > 0) {
+      previousChild = child;
+      previousMarkdown = markdown;
+    }
+  }
+
+  return parts.join('');
+}
+
 // Convert node tree to Markdown string
 function toMarkdown(root: MarkdownNode): string {
   const { type, props, children } = root;
 
-  // Get children's Markdown
-  const childrenMd = () =>
-    children
-      .map((child) => {
-        if (child instanceof TextNode) {
-          return child.text;
-        }
-        return toMarkdown(child);
-      })
-      .join('');
+  // Get children's Markdown lazily so ignored nodes do not serialize children.
+  const getChildrenMarkdown = () => renderChildren(root);
 
   // Generate corresponding Markdown based on element type
   switch (type) {
     case 'root':
-      return childrenMd();
+      return getChildrenMarkdown();
     case 'h1':
-      return `# ${childrenMd()}\n\n`;
+      return `# ${getChildrenMarkdown()}\n\n`;
     case 'h2':
-      return `## ${childrenMd()}\n\n`;
+      return `## ${getChildrenMarkdown()}\n\n`;
     case 'h3':
-      return `### ${childrenMd()}\n\n`;
+      return `### ${getChildrenMarkdown()}\n\n`;
     case 'h4':
-      return `#### ${childrenMd()}\n\n`;
+      return `#### ${getChildrenMarkdown()}\n\n`;
     case 'h5':
-      return `##### ${childrenMd()}\n\n`;
+      return `##### ${getChildrenMarkdown()}\n\n`;
     case 'h6':
-      return `###### ${childrenMd()}\n\n`;
+      return `###### ${getChildrenMarkdown()}\n\n`;
     case 'p':
-      return `${childrenMd()}\n\n`;
+      return `${getChildrenMarkdown()}\n\n`;
     case 'strong':
     case 'b':
-      return `**${childrenMd()}**`;
+      return `**${getChildrenMarkdown()}**`;
     case 'em':
     case 'i':
-      return `*${childrenMd()}*`;
+      return `*${getChildrenMarkdown()}*`;
     case 'code':
       // When <code> is nested inside <pre>, it represents the code block body,
       // so we must not wrap it with inline backticks (would create nested fences).
       if (root.parent?.type === 'pre') {
-        return childrenMd();
+        return getChildrenMarkdown();
       }
-      return `\`${childrenMd()}\``;
+      return `\`${getChildrenMarkdown()}\``;
     case 'pre': {
       const _language =
         props['data-lang'] || props.language || props.lang || '';
@@ -150,23 +270,23 @@ function toMarkdown(root: MarkdownNode): string {
         ? '````'
         : '```';
 
-      return `\n${block}${language}${title ? ` title=${title}` : ''}\n${childrenMd()}\n${block}\n`;
+      return `\n${block}${language}${title ? ` title=${title}` : ''}\n${getChildrenMarkdown()}\n${block}\n`;
     }
     case 'a':
-      return `[${childrenMd()}](${props.href || '#'})`;
+      return `[${getChildrenMarkdown()}](${props.href || '#'})`;
     case 'img':
       return `![${props.alt || ''}](${props.src || ''})`;
     case 'ul':
-      return `${childrenMd()}\n`;
+      return `${getChildrenMarkdown()}\n`;
     case 'ol':
-      return `${childrenMd()}\n`;
+      return `${getChildrenMarkdown()}\n`;
     case 'li': {
       const isOrdered = root.parent && root.parent.type === 'ol';
       const prefix = isOrdered ? '1. ' : '- ';
-      return `${prefix}${childrenMd()}\n`;
+      return `${prefix}${getChildrenMarkdown()}\n`;
     }
     case 'blockquote':
-      return `> ${childrenMd().split('\n').join('\n> ')}\n\n`;
+      return `> ${getChildrenMarkdown().split('\n').join('\n> ')}\n\n`;
     case 'br':
       return '\n';
     case 'hr':
@@ -174,11 +294,11 @@ function toMarkdown(root: MarkdownNode): string {
     case 'style':
       return '';
     case 'table':
-      return `${childrenMd()}\n`;
+      return `${getChildrenMarkdown()}\n`;
     case 'thead':
-      return childrenMd();
+      return getChildrenMarkdown();
     case 'tbody':
-      return childrenMd();
+      return getChildrenMarkdown();
     case 'tr': {
       const cells = children
         .filter((child): child is MarkdownNode => child instanceof MarkdownNode)
@@ -194,9 +314,9 @@ function toMarkdown(root: MarkdownNode): string {
     }
     case 'th':
     case 'td':
-      return childrenMd();
+      return getChildrenMarkdown();
     default:
-      return childrenMd();
+      return getChildrenMarkdown();
   }
 }
 
