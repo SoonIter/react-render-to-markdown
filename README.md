@@ -112,6 +112,7 @@ For languages that may contain triple backticks (like `markdown`, `mdx`, `md`), 
 | `<blockquote>` | `> blockquote` |
 | `<br>` | Line break |
 | `<hr>` | `---` horizontal rule |
+| `<style>` | Ignored |
 | `<table>`, `<thead>`, `<tbody>`, `<tr>`, `<th>`, `<td>` | GFM table |
 
 Any unrecognized elements (e.g. `<div>`, `<span>`, `<section>`) render their children as-is, acting as transparent wrappers.
