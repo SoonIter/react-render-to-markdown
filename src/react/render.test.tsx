@@ -243,6 +243,28 @@ console.log('Hello, world!');
 });
 
 describe('renderToMarkdownString - styles', () => {
+  it('ignores style tag content', async () => {
+    expect(
+      await renderToMarkdownString(
+        <div>
+          <h1>Title</h1>
+          <style>{`
+            .rspress-doc {
+              color: red;
+            }
+          `}</style>
+          <p>Content</p>
+        </div>,
+      ),
+    ).toMatchInlineSnapshot(`
+      "# Title
+
+      Content
+
+      "
+    `);
+  });
+
   it('renders two row correctly', async () => {
     const Comp1 = () => {
       return (

@@ -113,46 +113,47 @@ function toMarkdown(root: MarkdownNode): string {
   const { type, props, children } = root;
 
   // Get children's Markdown
-  const childrenMd = children
-    .map((child) => {
-      if (child instanceof TextNode) {
-        return child.text;
-      }
-      return toMarkdown(child);
-    })
-    .join('');
+  const childrenMd = () =>
+    children
+      .map((child) => {
+        if (child instanceof TextNode) {
+          return child.text;
+        }
+        return toMarkdown(child);
+      })
+      .join('');
 
   // Generate corresponding Markdown based on element type
   switch (type) {
     case 'root':
-      return childrenMd;
+      return childrenMd();
     case 'h1':
-      return `# ${childrenMd}\n\n`;
+      return `# ${childrenMd()}\n\n`;
     case 'h2':
-      return `## ${childrenMd}\n\n`;
+      return `## ${childrenMd()}\n\n`;
     case 'h3':
-      return `### ${childrenMd}\n\n`;
+      return `### ${childrenMd()}\n\n`;
     case 'h4':
-      return `#### ${childrenMd}\n\n`;
+      return `#### ${childrenMd()}\n\n`;
     case 'h5':
-      return `##### ${childrenMd}\n\n`;
+      return `##### ${childrenMd()}\n\n`;
     case 'h6':
-      return `###### ${childrenMd}\n\n`;
+      return `###### ${childrenMd()}\n\n`;
     case 'p':
-      return `${childrenMd}\n\n`;
+      return `${childrenMd()}\n\n`;
     case 'strong':
     case 'b':
-      return `**${childrenMd}**`;
+      return `**${childrenMd()}**`;
     case 'em':
     case 'i':
-      return `*${childrenMd}*`;
+      return `*${childrenMd()}*`;
     case 'code':
       // When <code> is nested inside <pre>, it represents the code block body,
       // so we must not wrap it with inline backticks (would create nested fences).
       if (root.parent?.type === 'pre') {
-        return childrenMd;
+        return childrenMd();
       }
-      return `\`${childrenMd}\``;
+      return `\`${childrenMd()}\``;
     case 'pre': {
       const _language =
         props['data-lang'] || props.language || props.lang || '';
@@ -163,33 +164,35 @@ function toMarkdown(root: MarkdownNode): string {
         ? '````'
         : '```';
 
-      return `\n${block}${language}${title ? ` title=${title}` : ''}\n${childrenMd}\n${block}\n`;
+      return `\n${block}${language}${title ? ` title=${title}` : ''}\n${childrenMd()}\n${block}\n`;
     }
     case 'a':
-      return `[${childrenMd}](${props.href || '#'})`;
+      return `[${childrenMd()}](${props.href || '#'})`;
     case 'img':
       return `![${props.alt || ''}](${props.src || ''})`;
     case 'ul':
-      return `${childrenMd}\n`;
+      return `${childrenMd()}\n`;
     case 'ol':
-      return `${childrenMd}\n`;
+      return `${childrenMd()}\n`;
     case 'li': {
       const isOrdered = root.parent && root.parent.type === 'ol';
       const prefix = isOrdered ? '1. ' : '- ';
-      return `${prefix}${childrenMd}\n`;
+      return `${prefix}${childrenMd()}\n`;
     }
     case 'blockquote':
-      return `> ${childrenMd.split('\n').join('\n> ')}\n\n`;
+      return `> ${childrenMd().split('\n').join('\n> ')}\n\n`;
     case 'br':
       return '\n';
     case 'hr':
       return '---\n\n';
+    case 'style':
+      return '';
     case 'table':
-      return `${childrenMd}\n`;
+      return `${childrenMd()}\n`;
     case 'thead':
-      return childrenMd;
+      return childrenMd();
     case 'tbody':
-      return childrenMd;
+      return childrenMd();
     case 'tr': {
       const cells = children
         .filter((child): child is MarkdownNode => child instanceof MarkdownNode)
@@ -205,9 +208,9 @@ function toMarkdown(root: MarkdownNode): string {
     }
     case 'th':
     case 'td':
-      return childrenMd;
+      return childrenMd();
     default:
-      return childrenMd;
+      return childrenMd();
   }
 }
 
