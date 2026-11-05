@@ -110,6 +110,7 @@ For languages that may contain triple backticks (like `markdown`, `mdx`, `md`), 
 | `<img>` | `![alt](src)` |
 | `<ul>`, `<ol>`, `<li>` | Unordered / ordered lists |
 | `<blockquote>` | `> blockquote` |
+| `<input type="checkbox">` | Task list checkbox (`[x] ` / `[ ] `) |
 | `<br>` | Line break |
 | `<hr>` | `---` horizontal rule |
 | `<style>` | Ignored |

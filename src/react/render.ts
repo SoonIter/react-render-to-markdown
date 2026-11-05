@@ -276,6 +276,11 @@ function toMarkdown(root: MarkdownNode): string {
       return `[${getChildrenMarkdown()}](${props.href || '#'})`;
     case 'img':
       return `![${props.alt || ''}](${props.src || ''})`;
+    case 'input':
+      if (props.type === 'checkbox') {
+        return props.checked || props.defaultChecked ? '[x] ' : '[ ] ';
+      }
+      return '';
     case 'ul':
       return `${getChildrenMarkdown()}\n`;
     case 'ol':
