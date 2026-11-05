@@ -278,7 +278,7 @@ function toMarkdown(root: MarkdownNode): string {
       return `![${props.alt || ''}](${props.src || ''})`;
     case 'input':
       if (props.type === 'checkbox') {
-        return (props.checked || props.defaultChecked) ? '[x] ' : '[ ] ';
+        return props.checked || props.defaultChecked ? '[x] ' : '[ ] ';
       }
       return '';
     case 'ul':

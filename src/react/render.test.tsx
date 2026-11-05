@@ -69,6 +69,38 @@ describe('renderToMarkdownString', () => {
     `);
   });
 
+  it('renders task list checkboxes and ignores other inputs', async () => {
+    expect(
+      await renderToMarkdownString(
+        <ul>
+          <li>
+            <input type="checkbox" checked readOnly />
+            Done
+          </li>
+          <li>
+            <input type="checkbox" defaultChecked />
+            Also done
+          </li>
+          <li>
+            <input type="checkbox" />
+            Todo
+          </li>
+          <li>
+            <input type="text" defaultValue="ignored" />
+            Text input
+          </li>
+        </ul>,
+      ),
+    ).toMatchInlineSnapshot(`
+      "- [x] Done
+      - [x] Also done
+      - [ ] Todo
+      - Text input
+
+      "
+    `);
+  });
+
   it('renders markdown string', async () => {
     const context = createContext({ a: 1 });
     const Comp = () => {
