@@ -1,3 +1,4 @@
+import { setImmediate } from 'node:timers/promises';
 import React, {
   type ReactNode,
   createContext,
@@ -8,6 +9,7 @@ import React, {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import { describe, expect, it } from 'vitest';
 import { renderToMarkdownString } from './render';
@@ -284,6 +286,66 @@ describe('renderToMarkdownString - styles', () => {
 });
 
 describe('renderToMarkdownString - effects never execute (SSR behavior)', () => {
+  it('useSyncExternalStore requires a server snapshot', async () => {
+    const errors: Error[] = [];
+    class Boundary extends React.Component<{ children: ReactNode }> {
+      state = { failed: false };
+      static getDerivedStateFromError() {
+        return { failed: true };
+      }
+      componentDidCatch(error: Error) {
+        errors.push(error);
+      }
+      render() {
+        return this.state.failed ? null : this.props.children;
+      }
+    }
+    const Comp = () => {
+      const value = useSyncExternalStore(
+        () => () => {},
+        () => 'Client',
+      );
+      return <p>{value}</p>;
+    };
+
+    await renderToMarkdownString(
+      <Boundary>
+        <Comp />
+      </Boundary>,
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toContain('Missing getServerSnapshot');
+  });
+
+  it('useSyncExternalStore reads the server snapshot without subscribing', async () => {
+    const calls: string[] = [];
+    const Comp = () => {
+      const value = useSyncExternalStore(
+        () => {
+          calls.push('subscribe');
+          window.addEventListener('storage', () => {});
+          return () => {};
+        },
+        () => {
+          calls.push('getSnapshot');
+          return 'Client snapshot';
+        },
+        () => {
+          calls.push('getServerSnapshot');
+          return 'Server snapshot';
+        },
+      );
+      return <p>{value}</p>;
+    };
+
+    const result = await renderToMarkdownString(<Comp />);
+    // Subscriptions may run after the renderer's commit callback resolves.
+    await setImmediate();
+    expect(result).toBe('Server snapshot\n\n');
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((call) => call === 'getServerSnapshot')).toBe(true);
+  });
+
   it('useEffect callback never executes - document access does not throw', async () => {
     const effectLog: string[] = [];
 

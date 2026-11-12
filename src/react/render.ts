@@ -17,9 +17,25 @@ const ReactSharedInternals: Record<string, unknown> | null = (
 
 function noop(): void {}
 
+// Match React Fizz: read the server snapshot without setting up subscriptions.
+function useServerSnapshot<T>(
+  _subscribe: (onStoreChange: () => void) => () => void,
+  _getSnapshot: () => T,
+  getServerSnapshot?: () => T,
+): T {
+  if (getServerSnapshot === undefined) {
+    throw new Error(
+      'Missing getServerSnapshot, which is required for ' +
+        'server-rendered content. Will revert to client rendering.',
+    );
+  }
+  return getServerSnapshot();
+}
+
 /**
  * Intercept the React hooks dispatcher so that useEffect, useLayoutEffect,
  * and useInsertionEffect become no-ops — matching React Fizz SSR behavior.
+ * useSyncExternalStore only reads its server snapshot and never subscribes.
  *
  * Uses a refcount so multiple concurrent renderToMarkdownString calls
  * (e.g. via p-map) safely share a single interceptor and only restore the
@@ -94,6 +110,9 @@ function installEffectInterceptor(): () => void {
           cachedTarget = realH;
           cachedProxy = new Proxy(realH, {
             get(target, prop, receiver) {
+              if (prop === 'useSyncExternalStore') {
+                return useServerSnapshot;
+              }
               if (
                 prop === 'useEffect' ||
                 prop === 'useLayoutEffect' ||

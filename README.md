@@ -46,7 +46,7 @@ await renderToMarkdownString(
 
 ### React Components & Hooks
 
-Synchronous hooks (`useState`, `useMemo`, `useRef`, `useContext`, etc.) work as expected. Client-side effects (`useEffect`, `useLayoutEffect`) are automatically suppressed:
+React components and hooks follow the server-rendering behavior of `react-dom/server`.
 
 ```tsx
 import { createContext, useContext, useMemo, useState } from 'react';
