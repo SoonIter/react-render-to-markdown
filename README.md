@@ -46,7 +46,9 @@ await renderToMarkdownString(
 
 ### React Components & Hooks
 
-Synchronous hooks (`useState`, `useMemo`, `useRef`, `useContext`, etc.) work as expected. Client-side effects (`useEffect`, `useLayoutEffect`) are automatically suppressed:
+Synchronous hooks (`useState`, `useMemo`, `useRef`, `useContext`, etc.) work as expected. Like React's server renderer, `useSyncExternalStore` reads only `getServerSnapshot` and never calls `getSnapshot` or sets up a subscription. Providing `getServerSnapshot` is required when using this hook.
+
+Client-side effects (`useEffect`, `useLayoutEffect`) are automatically suppressed:
 
 ```tsx
 import { createContext, useContext, useMemo, useState } from 'react';
