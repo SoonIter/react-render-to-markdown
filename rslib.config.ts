@@ -15,11 +15,11 @@ export default defineConfig({
         },
       },
       output: {
-        externals: ['react-reconciler'],
+        externals: ['react-dom/server', 'htmlparser2'],
       },
     },
     {
-      bundle: false,
+      bundle: true,
       dts: false,
       syntax: 'es2022',
       format: 'cjs',
@@ -29,7 +29,7 @@ export default defineConfig({
         },
       },
       output: {
-        externals: ['react-reconciler'],
+        externals: ['react-dom/server', 'htmlparser2'],
       },
     },
   ],
