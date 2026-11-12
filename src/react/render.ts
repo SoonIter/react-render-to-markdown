@@ -32,6 +32,21 @@ function useServerSnapshot<T>(
   return getServerSnapshot();
 }
 
+function unsupportedServerUpdate(): never {
+  throw new Error(
+    'State transitions cannot be started during server rendering.',
+  );
+}
+function useServerTransition(): [boolean, typeof unsupportedServerUpdate] {
+  return [false, unsupportedServerUpdate];
+}
+function useServerOptimistic<T>(value: T): [T, typeof unsupportedServerUpdate] {
+  return [value, unsupportedServerUpdate];
+}
+function useServerDeferredValue<T>(value: T, initialValue?: T): T {
+  return initialValue !== undefined ? initialValue : value;
+}
+
 /**
  * Intercept the React hooks dispatcher so that useEffect, useLayoutEffect,
  * and useInsertionEffect become no-ops — matching React Fizz SSR behavior.
@@ -110,13 +125,17 @@ function installEffectInterceptor(): () => void {
           cachedTarget = realH;
           cachedProxy = new Proxy(realH, {
             get(target, prop, receiver) {
+              if (prop === 'useTransition') return useServerTransition;
+              if (prop === 'useOptimistic') return useServerOptimistic;
+              if (prop === 'useDeferredValue') return useServerDeferredValue;
               if (prop === 'useSyncExternalStore') {
                 return useServerSnapshot;
               }
               if (
                 prop === 'useEffect' ||
                 prop === 'useLayoutEffect' ||
-                prop === 'useInsertionEffect'
+                prop === 'useInsertionEffect' ||
+                prop === 'useImperativeHandle'
               ) {
                 return noop;
               }
@@ -201,6 +220,7 @@ function getBlockSeparator(
 }
 
 function childToMarkdown(child: MarkdownNode | TextNode): string {
+  if (child.hidden) return '';
   if (child instanceof TextNode) {
     return child.text;
   }
@@ -339,12 +359,27 @@ function toMarkdown(root: MarkdownNode): string {
   }
 }
 
+type PendingFiber = {
+  tag: number;
+  memoizedState: unknown;
+  child: PendingFiber | null;
+  sibling: PendingFiber | null;
+};
+function hasPendingSuspense(fiber: PendingFiber | null): boolean {
+  for (let node = fiber; node; node = node.sibling) {
+    if (node.tag === 13 && node.memoizedState !== null) return true;
+    if (hasPendingSuspense(node.child)) return true;
+  }
+  return false;
+}
+
 // Render function (SSR-like behavior: neither useEffect nor useLayoutEffect run)
 export async function renderToMarkdownString(
   element: React.ReactElement,
 ): Promise<string> {
   const container = new MarkdownNode('root');
 
+  let rejectCommit: (error: unknown) => void = noop;
   const root = reconciler.createContainer(
     container,
     1, // tag (ConcurrentRoot = 1)
@@ -352,14 +387,8 @@ export async function renderToMarkdownString(
     false, // isStrictMode
     false, // concurrentUpdatesByDefaultOverride
     '', // identifierPrefix
-    (error, info) => {
-      if (process.env.DEBUG) {
-        console.error('Reconciler Error:', error, info);
-        const message = `Reconciler Error:${error.message}`;
-        throw new Error(message);
-      }
-    }, // onUncaughtError
-    () => {}, // onCaughtError
+    (error) => rejectCommit(error), // onUncaughtError
+    (error) => rejectCommit(error), // onCaughtError
     (...args) => {
       if (process.env.DEBUG) {
         console.log('Reconciler onRecoverable Error:', ...args);
@@ -368,6 +397,8 @@ export async function renderToMarkdownString(
     () => {}, // onDefaultTransitionIndicator
   );
 
+  container.renderRoot = root as unknown as MarkdownNode['renderRoot'];
+
   // Intercept the React hooks dispatcher to make useEffect / useLayoutEffect
   // / useInsertionEffect no-ops, matching React Fizz SSR behavior.
   const removeInterceptor = installEffectInterceptor();
@@ -375,15 +406,22 @@ export async function renderToMarkdownString(
   try {
     // Set up a promise that resolves when commit completes
     let resolveCommit: ((arg: string) => void) | null = null;
-    const commitPromise = new Promise<string>((resolve) => {
+    const commitPromise = new Promise<string>((resolve, reject) => {
+      rejectCommit = reject;
       resolveCommit = resolve;
     });
 
+    const complete = () => {
+      const fiberRoot = root as unknown as {
+        current: { child: PendingFiber | null };
+      };
+      if (hasPendingSuspense(fiberRoot.current.child)) return;
+      const markdown = toMarkdown(container);
+      queueMicrotask(() => resolveCommit?.(markdown));
+    };
+    container.onCommit = () => queueMicrotask(complete);
     reconciler.updateContainer(element, root, null, () => {
-      // This callback is called after commit
-      if (resolveCommit) {
-        resolveCommit(toMarkdown(container));
-      }
+      complete();
     });
 
     return await commitPromise;

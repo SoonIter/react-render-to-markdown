@@ -287,19 +287,6 @@ describe('renderToMarkdownString - styles', () => {
 
 describe('renderToMarkdownString - effects never execute (SSR behavior)', () => {
   it('useSyncExternalStore requires a server snapshot', async () => {
-    const errors: Error[] = [];
-    class Boundary extends React.Component<{ children: ReactNode }> {
-      state = { failed: false };
-      static getDerivedStateFromError() {
-        return { failed: true };
-      }
-      componentDidCatch(error: Error) {
-        errors.push(error);
-      }
-      render() {
-        return this.state.failed ? null : this.props.children;
-      }
-    }
     const Comp = () => {
       const value = useSyncExternalStore(
         () => () => {},
@@ -308,13 +295,9 @@ describe('renderToMarkdownString - effects never execute (SSR behavior)', () => 
       return <p>{value}</p>;
     };
 
-    await renderToMarkdownString(
-      <Boundary>
-        <Comp />
-      </Boundary>,
+    await expect(renderToMarkdownString(<Comp />)).rejects.toThrow(
+      'Missing getServerSnapshot',
     );
-    expect(errors).toHaveLength(1);
-    expect(errors[0].message).toContain('Missing getServerSnapshot');
   });
 
   it('useSyncExternalStore reads the server snapshot without subscribing', async () => {

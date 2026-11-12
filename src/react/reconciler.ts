@@ -12,8 +12,25 @@ type HostContext = {
   isInsideText: boolean;
 };
 
+// React 19.2/19.3 commit flags used by the pinned reconciler 0.33.
+// Suppress mount/update lifecycle and ref work, without changing components.
+type CommitFiber = {
+  tag: number;
+  flags: number;
+  child: CommitFiber | null;
+  sibling: CommitFiber | null;
+};
+function suppressClientCommit(fiber: CommitFiber | null): void {
+  for (let node = fiber; node; node = node.sibling) {
+    node.flags &= ~512; // Ref
+    if (node.tag === 1) node.flags &= ~4; // Class layout lifecycle
+    suppressClientCommit(node.child);
+  }
+}
+
 // Text node class
 export class TextNode {
+  hidden = false;
   public text: string;
   public parent?: MarkdownNode;
 
@@ -28,6 +45,9 @@ export class TextNode {
 
 // Markdown node class
 export class MarkdownNode {
+  hidden = false;
+  onCommit?: () => void;
+  renderRoot?: { current: { alternate: CommitFiber | null } };
   public type: string;
   public props: Record<string, unknown>;
   public children: (MarkdownNode | TextNode)[];
@@ -179,8 +199,7 @@ const hostConfig: createReconciler.HostConfig<
     return false;
   },
 
-  // Commit mount - explicitly no-op to prevent lifecycle methods
-  // This prevents componentDidMount from being called (SSR behavior)
+  // Host commitMount is separate from class lifecycle callbacks.
   commitMount(): void {
     // No-op: In SSR/static rendering, we don't want lifecycle methods to run
   },
@@ -223,10 +242,13 @@ const hostConfig: createReconciler.HostConfig<
   getPublicInstance(instance: MarkdownNode | TextNode) {
     return instance;
   },
-  prepareForCommit(_containerInfo: MarkdownNode): null {
+  prepareForCommit(containerInfo: MarkdownNode): null {
+    suppressClientCommit(containerInfo.renderRoot?.current.alternate ?? null);
     return null;
   },
-  resetAfterCommit(_containerInfo: MarkdownNode): void {},
+  resetAfterCommit(containerInfo: MarkdownNode): void {
+    containerInfo.onCommit?.();
+  },
   // Use real setTimeout/clearTimeout to allow React to schedule work properly
   // Effects will still be scheduled, but we'll read the result before they execute
   scheduleTimeout: setTimeout,
@@ -271,18 +293,21 @@ const hostConfig: createReconciler.HostConfig<
   },
 
   hideInstance(_instance: MarkdownNode): void {
+    _instance.hidden = true;
     // Logic to hide an instance; can set a flag here
   },
 
   hideTextInstance(textInstance: TextNode): void {
-    textInstance.setText('');
+    textInstance.hidden = true;
   },
 
   unhideInstance(_instance: MarkdownNode): void {
+    _instance.hidden = false;
     // Logic to unhide an instance
   },
 
   unhideTextInstance(textInstance: TextNode, text: string): void {
+    textInstance.hidden = false;
     textInstance.setText(text);
   },
 

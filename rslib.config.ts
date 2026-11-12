@@ -19,7 +19,7 @@ export default defineConfig({
       },
     },
     {
-      bundle: false,
+      bundle: true,
       dts: false,
       syntax: 'es2022',
       format: 'cjs',
