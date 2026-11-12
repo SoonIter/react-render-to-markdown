@@ -15,7 +15,7 @@ export default defineConfig({
         },
       },
       output: {
-        externals: ['react-dom/server', 'htmlparser2'],
+        externals: ['react-reconciler'],
       },
     },
     {
@@ -29,7 +29,7 @@ export default defineConfig({
         },
       },
       output: {
-        externals: ['react-dom/server', 'htmlparser2'],
+        externals: ['react-reconciler'],
       },
     },
   ],

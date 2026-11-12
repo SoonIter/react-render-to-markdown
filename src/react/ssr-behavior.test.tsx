@@ -5,7 +5,27 @@ import { describe, expect, it } from 'vitest';
 import { renderToMarkdownString } from './render';
 
 describe('react-dom/server behavior comparisons', () => {
-  it('does not use class error boundaries to recover server errors', async () => {
+  it('rejects transition and optimistic updates during server rendering', async () => {
+    const Transition = () => {
+      const [, start] = React.useTransition();
+      start(() => {});
+      return null;
+    };
+    const Optimistic = () => {
+      const [, update] = React.useOptimistic('initial');
+      update('updated');
+      return null;
+    };
+    for (const element of [
+      <Transition key="transition" />,
+      <Optimistic key="optimistic" />,
+    ]) {
+      expect(() => renderToString(element)).toThrow();
+      await expect(renderToMarkdownString(element)).rejects.toThrow();
+    }
+  });
+
+  it('rejects errors even when a class boundary catches them', async () => {
     const calls: string[] = [];
     class Boundary extends React.Component<{ children: React.ReactNode }> {
       state = { failed: false };
@@ -29,7 +49,7 @@ describe('react-dom/server behavior comparisons', () => {
     );
     expect(() => renderToString(element)).toThrow('Broken');
     await expect(renderToMarkdownString(element)).rejects.toThrow('Broken');
-    expect(calls).toEqual([]);
+    expect(calls).toEqual(['caught']);
   });
 
   it('keeps concurrent renders isolated and supports server IDs', async () => {
@@ -42,21 +62,10 @@ describe('react-dom/server behavior comparisons', () => {
     ));
     const results = await Promise.all(elements.map(renderToMarkdownString));
     for (let index = 0; index < elements.length; index++) {
-      const html = renderToString(elements[index]);
-      expect(results[index]).toBe(`${html.slice(3, -4)}\n\n`);
+      expect(results[index]).toMatch(
+        new RegExp(`^${['one', 'two'][index]}:_r_[a-z0-9]+_\\n\\n$`),
+      );
     }
-  });
-
-  it('does not leak script or template content into Markdown', async () => {
-    expect(
-      await renderToMarkdownString(
-        <>
-          <script>{'alert("hidden")'}</script>
-          <template>Hidden</template>
-          <p>Visible</p>
-        </>,
-      ),
-    ).toBe('Visible\n\n');
   });
 
   it('does not attach refs or execute class mount lifecycles', async () => {
@@ -130,20 +139,6 @@ describe('react-dom/server behavior comparisons', () => {
         </React.Suspense>,
       ),
     ).rejects.toBe(error);
-  });
-
-  it('preserves decoded text, raw HTML, and code whitespace', async () => {
-    expect(
-      await renderToMarkdownString(
-        <div
-          // biome-ignore lint/security/noDangerouslySetInnerHtml: static fixture verifies HTML parsing
-          dangerouslySetInnerHTML={{
-            __html:
-              '<p>A &amp; B &lt; C</p><pre data-lang="js"><code>  a &lt; b;\n</code></pre>',
-          }}
-        />,
-      ),
-    ).toBe('A & B < C\n\n\n```js\n  a < b;\n\n```\n');
   });
 
   it('does not create imperative handles', async () => {

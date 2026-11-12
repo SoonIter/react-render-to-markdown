@@ -1,8 +1,68 @@
-import { PassThrough } from 'node:stream';
-import { Parser } from 'htmlparser2';
-import type React from 'react';
-import { renderToPipeableStream } from 'react-dom/server';
-import { MarkdownNode, TextNode } from './nodes.js';
+import React from 'react';
+import { MarkdownNode, TextNode, reconciler } from './reconciler.js';
+
+// Access React internals to intercept the hooks dispatcher.
+// React 19: __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE.H
+// React's Fizz server renderer (renderToString) sets useEffect/useLayoutEffect
+// to noop in its HooksDispatcher. We replicate this by intercepting the H
+// property on ReactSharedInternals during our render pass.
+// https://github.com/facebook/react/blob/c3b0e20e4/packages/react/src/ReactSharedInternals.js
+// https://github.com/facebook/react/blob/c3b0e20e4/packages/react-server/src/ReactFizzHooks.js#L817-L822
+const ReactSharedInternals: Record<string, unknown> | null = (
+  React as Record<string, unknown>
+).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE as Record<
+  string,
+  unknown
+> | null;
+
+function noop(): void {}
+
+// Match React Fizz: read the server snapshot without setting up subscriptions.
+function useServerSnapshot<T>(
+  _subscribe: (onStoreChange: () => void) => () => void,
+  _getSnapshot: () => T,
+  getServerSnapshot?: () => T,
+): T {
+  if (getServerSnapshot === undefined) {
+    throw new Error(
+      'Missing getServerSnapshot, which is required for ' +
+        'server-rendered content. Will revert to client rendering.',
+    );
+  }
+  return getServerSnapshot();
+}
+
+function unsupportedServerUpdate(): never {
+  throw new Error(
+    'State transitions cannot be started during server rendering.',
+  );
+}
+function useServerTransition(): [boolean, typeof unsupportedServerUpdate] {
+  return [false, unsupportedServerUpdate];
+}
+function useServerOptimistic<T>(value: T): [T, typeof unsupportedServerUpdate] {
+  return [value, unsupportedServerUpdate];
+}
+function useServerDeferredValue<T>(value: T, initialValue?: T): T {
+  return initialValue !== undefined ? initialValue : value;
+}
+
+/**
+ * Intercept the React hooks dispatcher so that useEffect, useLayoutEffect,
+ * and useInsertionEffect become no-ops — matching React Fizz SSR behavior.
+ * useSyncExternalStore only reads its server snapshot and never subscribes.
+ *
+ * Uses a refcount so multiple concurrent renderToMarkdownString calls
+ * (e.g. via p-map) safely share a single interceptor and only restore the
+ * original descriptor when the last render completes.
+ *
+ * Returns a cleanup function that decrements the refcount.
+ */
+let interceptorRefCount = 0;
+let originalDescriptor: PropertyDescriptor | undefined;
+let realH: Record<string, unknown> | null = null;
+let cachedTarget: unknown = null;
+let cachedProxy: unknown = null;
 
 const transparentBlockTypes = new Set([
   'address',
@@ -37,6 +97,74 @@ const markdownBlockTypes = new Set([
   'table',
   'ul',
 ]);
+
+function installEffectInterceptor(): () => void {
+  if (!ReactSharedInternals) {
+    return noop;
+  }
+
+  interceptorRefCount++;
+  if (interceptorRefCount === 1) {
+    // First caller — save the original descriptor and install the interceptor.
+    originalDescriptor = Object.getOwnPropertyDescriptor(
+      ReactSharedInternals,
+      'H',
+    );
+    realH = ReactSharedInternals.H as Record<string, unknown> | null;
+    cachedTarget = null;
+    cachedProxy = null;
+
+    Object.defineProperty(ReactSharedInternals, 'H', {
+      get() {
+        if (realH == null) {
+          return realH;
+        }
+        // Cache the proxy per dispatcher identity to avoid creating a new one
+        // on every property access.
+        if (cachedTarget !== realH) {
+          cachedTarget = realH;
+          cachedProxy = new Proxy(realH, {
+            get(target, prop, receiver) {
+              if (prop === 'useTransition') return useServerTransition;
+              if (prop === 'useOptimistic') return useServerOptimistic;
+              if (prop === 'useDeferredValue') return useServerDeferredValue;
+              if (prop === 'useSyncExternalStore') {
+                return useServerSnapshot;
+              }
+              if (
+                prop === 'useEffect' ||
+                prop === 'useLayoutEffect' ||
+                prop === 'useInsertionEffect' ||
+                prop === 'useImperativeHandle'
+              ) {
+                return noop;
+              }
+              return Reflect.get(target, prop, receiver);
+            },
+          });
+        }
+        return cachedProxy;
+      },
+      set(value) {
+        realH = value;
+      },
+      configurable: true,
+    });
+  }
+
+  return () => {
+    interceptorRefCount--;
+    if (interceptorRefCount === 0) {
+      // Last caller — restore the original property descriptor.
+      if (originalDescriptor) {
+        Object.defineProperty(ReactSharedInternals, 'H', originalDescriptor);
+      } else {
+        (ReactSharedInternals as Record<string, unknown>).H = undefined;
+        ReactSharedInternals.H = realH;
+      }
+    }
+  };
+}
 
 function isFlowContainer(type: string): boolean {
   return type === 'root' || transparentBlockTypes.has(type);
@@ -92,6 +220,7 @@ function getBlockSeparator(
 }
 
 function childToMarkdown(child: MarkdownNode | TextNode): string {
+  if (child.hidden) return '';
   if (child instanceof TextNode) {
     return child.text;
   }
@@ -202,8 +331,6 @@ function toMarkdown(root: MarkdownNode): string {
     case 'hr':
       return '---\n\n';
     case 'style':
-    case 'script':
-    case 'template':
       return '';
     case 'table':
       return `${getChildrenMarkdown()}\n`;
@@ -232,51 +359,73 @@ function toMarkdown(root: MarkdownNode): string {
   }
 }
 
-// Let React Fizz own component execution, SSR hooks, and async boundaries.
+type PendingFiber = {
+  tag: number;
+  memoizedState: unknown;
+  child: PendingFiber | null;
+  sibling: PendingFiber | null;
+};
+function hasPendingSuspense(fiber: PendingFiber | null): boolean {
+  for (let node = fiber; node; node = node.sibling) {
+    if (node.tag === 13 && node.memoizedState !== null) return true;
+    if (hasPendingSuspense(node.child)) return true;
+  }
+  return false;
+}
+
+// Render function (SSR-like behavior: neither useEffect nor useLayoutEffect run)
 export async function renderToMarkdownString(
   element: React.ReactElement,
 ): Promise<string> {
-  const html = await new Promise<string>((resolve, reject) => {
-    const destination = new PassThrough();
-    const chunks: Buffer[] = [];
-    let renderError: unknown;
-    let didError = false;
-    destination.on('data', (chunk: Buffer) => chunks.push(chunk));
-    destination.on('error', reject);
-    destination.on('end', () => {
-      if (didError) reject(renderError);
-      else resolve(Buffer.concat(chunks).toString('utf8'));
-    });
-    const stream = renderToPipeableStream(element, {
-      onAllReady() {
-        stream.pipe(destination);
-      },
-      onShellError: reject,
-      onError(error) {
-        didError = true;
-        renderError = error;
-      },
-    });
-  });
-
   const container = new MarkdownNode('root');
-  const stack = [container];
-  const parser = new Parser(
-    {
-      onopentag(name, attributes) {
-        const node = new MarkdownNode(name, attributes);
-        stack[stack.length - 1].appendChild(node);
-        stack.push(node);
-      },
-      ontext(text) {
-        stack[stack.length - 1].appendChild(new TextNode(text));
-      },
-      onclosetag() {
-        stack.pop();
-      },
-    },
-    { decodeEntities: true },
+
+  let rejectCommit: (error: unknown) => void = noop;
+  const root = reconciler.createContainer(
+    container,
+    1, // tag (ConcurrentRoot = 1)
+    null, // hydrationCallbacks
+    false, // isStrictMode
+    false, // concurrentUpdatesByDefaultOverride
+    '', // identifierPrefix
+    (error) => rejectCommit(error), // onUncaughtError
+    (error) => rejectCommit(error), // onCaughtError
+    (...args) => {
+      if (process.env.DEBUG) {
+        console.log('Reconciler onRecoverable Error:', ...args);
+      }
+    }, // onRecoverableError
+    () => {}, // onDefaultTransitionIndicator
   );
-  parser.end(html);
-  return toMarkdown(container);
+
+  container.renderRoot = root as unknown as MarkdownNode['renderRoot'];
+
+  // Intercept the React hooks dispatcher to make useEffect / useLayoutEffect
+  // / useInsertionEffect no-ops, matching React Fizz SSR behavior.
+  const removeInterceptor = installEffectInterceptor();
+
+  try {
+    // Set up a promise that resolves when commit completes
+    let resolveCommit: ((arg: string) => void) | null = null;
+    const commitPromise = new Promise<string>((resolve, reject) => {
+      rejectCommit = reject;
+      resolveCommit = resolve;
+    });
+
+    const complete = () => {
+      const fiberRoot = root as unknown as {
+        current: { child: PendingFiber | null };
+      };
+      if (hasPendingSuspense(fiberRoot.current.child)) return;
+      const markdown = toMarkdown(container);
+      queueMicrotask(() => resolveCommit?.(markdown));
+    };
+    container.onCommit = () => queueMicrotask(complete);
+    reconciler.updateContainer(element, root, null, () => {
+      complete();
+    });
+
+    return await commitPromise;
+  } finally {
+    removeInterceptor();
+  }
 }

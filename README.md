@@ -5,7 +5,7 @@
 
 Render React components to Markdown strings — like `renderToString` in `react-dom`, but outputs **Markdown** instead of HTML.
 
-Uses `react-dom/server` to render React components with official SSR behavior, then converts the resulting HTML into Markdown.
+Built on top of `react-reconciler`, this library creates a custom React renderer that traverses the React element tree and produces well-formatted Markdown. It follows **SSR-like behavior**: `useEffect`, `useLayoutEffect`, and `useInsertionEffect` are suppressed (as no-ops), while `useState`, `useMemo`, `useRef`, `useContext`, and other synchronous hooks work as expected.
 
 ## Installation
 
@@ -119,15 +119,20 @@ Any unrecognized elements (e.g. `<div>`, `<span>`, `<section>`) render their chi
 
 ## How It Works
 
-1. **React server rendering** — Uses `react-dom/server` and waits for all Suspense boundaries to finish before collecting HTML. Hooks, refs, and class lifecycle behavior are handled by React itself.
-2. **HTML parsing** — Parses the completed HTML into a lightweight node tree, decoding entities while preserving text and code whitespace.
-3. **Markdown serialization** — Converts the node tree into Markdown using the existing element and spacing rules.
-
-Rendering errors reject the returned Promise, including errors inside Suspense boundaries. This is deliberately stricter than React's streaming HTML recovery: a failed page must not silently become incomplete Markdown. Class error boundaries do not catch server-rendering errors.
+1. **Custom React Reconciler** — Uses `react-reconciler` to build a lightweight tree of `MarkdownNode` objects from your React element tree.
+2. **SSR-like Hook Behavior** — Client-side effects (`useEffect`, `useLayoutEffect`, `useInsertionEffect`) are intercepted and turned into no-ops, matching React's Fizz server renderer behavior. This ensures browser-only code (e.g. `document`, `window`) in effects never runs.
+3. **Tree-to-Markdown Serialization** — The `MarkdownNode` tree is serialized to a Markdown string via a recursive `toMarkdown` function.
 
 ## Requirements
 
-React 19 and a matching version of `react-dom` are required. This package runs in Node.js and uses `react-dom/server`'s Node stream API.
+```json
+{
+  "react": ">=19.0.0",
+  "react-reconciler": "^0.33.0"
+}
+```
+
+> **Note:** React 19 or above is required. The effect-interception mechanism relies on React 19's internal hooks dispatcher (`__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE.H`).
 
 ## Used By
 
