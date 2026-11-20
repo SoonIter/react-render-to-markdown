@@ -1,15 +1,18 @@
+import { Writable } from 'node:stream';
 import { setImmediate } from 'node:timers/promises';
 import React, { useImperativeHandle, useRef } from 'react';
-import { renderToString } from 'react-dom/server';
+import { renderToPipeableStream, renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { renderToMarkdownString } from './render';
 
 function createDeferredValue() {
   let resolve!: (value: string) => void;
-  const promise = new Promise<string>((resolvePromise) => {
+  let reject!: (error: Error) => void;
+  const promise = new Promise<string>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 async function waitForRender(rendered: () => boolean) {
@@ -17,7 +20,28 @@ async function waitForRender(rendered: () => boolean) {
   await setImmediate();
 }
 
-describe('react-dom/server behavior comparisons', () => {
+async function renderAllToHtml(element: React.ReactElement) {
+  let html = '';
+  await new Promise<void>((resolve, reject) => {
+    const destination = new Writable({
+      write(chunk, _encoding, next) {
+        html += chunk.toString();
+        next();
+      },
+    });
+    destination.on('finish', resolve);
+    destination.on('error', reject);
+    const stream = renderToPipeableStream(element, {
+      onAllReady() {
+        stream.pipe(destination);
+      },
+      onError: reject,
+    });
+  });
+  return html;
+}
+
+describe('SSR behavior and documented renderer differences', () => {
   it('rejects transition and optimistic updates during server rendering', async () => {
     const Transition = () => {
       const [, start] = React.useTransition();
@@ -61,11 +85,13 @@ describe('react-dom/server behavior comparisons', () => {
       </Boundary>
     );
     expect(() => renderToString(element)).toThrow('Broken');
+    expect(calls).toEqual([]);
     await expect(renderToMarkdownString(element)).rejects.toThrow('Broken');
+    // Client error callbacks remain supported, although Fizz skips boundaries.
     expect(calls).toEqual(['caught']);
   });
 
-  it('keeps concurrent renders isolated and supports server IDs', async () => {
+  it('keeps concurrent contexts isolated and retains distinct client reconciler IDs', async () => {
     const Context = React.createContext('default');
     const Comp = () => <p>{`${React.useContext(Context)}:${React.useId()}`}</p>;
     const elements = ['one', 'two'].map((value) => (
@@ -79,6 +105,7 @@ describe('react-dom/server behavior comparisons', () => {
         new RegExp(`^${['one', 'two'][index]}:_r_[a-z0-9]+_\\n\\n$`),
       );
     }
+    expect(results[0]).not.toBe(results[1].replace('two:', 'one:'));
   });
 
   it('does not attach refs or execute class mount lifecycles', async () => {
@@ -109,7 +136,7 @@ describe('react-dom/server behavior comparisons', () => {
     const calls: string[] = [];
     const classRef = React.createRef<Content>();
     const hostRef = React.createRef<HTMLParagraphElement>();
-    const value = createDeferredValue();
+    let value = createDeferredValue();
     let fallbackRendered = false;
     let instance: Content | undefined;
     class Content extends React.Component<{ children: React.ReactNode }> {
@@ -132,7 +159,7 @@ describe('react-dom/server behavior comparisons', () => {
                 calls.push('content ref');
               }}
             >
-              {this.#content}:{this.props.children}
+              {`${this.#content}:${this.props.children}`}
             </span>
           </p>
         );
@@ -163,6 +190,14 @@ describe('react-dom/server behavior comparisons', () => {
         <Async />
       </React.Suspense>
     );
+    const serverResult = renderAllToHtml(element);
+    await waitForRender(() => fallbackRendered);
+    value.resolve('content');
+    expect(await serverResult).toContain('<p><span>Ready:content</span></p>');
+    expect(calls).toEqual([]);
+
+    value = createDeferredValue();
+    fallbackRendered = false;
     const result = renderToMarkdownString(element);
     await waitForRender(() => fallbackRendered);
     value.resolve('content');
@@ -176,7 +211,7 @@ describe('react-dom/server behavior comparisons', () => {
     expect(calls).toEqual([]);
   });
 
-  it('uses server values for transition, deferred, optimistic and action state hooks', async () => {
+  it('uses server values for transition, deferred, optimistic and initial action state hooks', async () => {
     const Comp = () => {
       const [pending] = React.useTransition();
       const deferred = React.useDeferredValue('current', 'initial');
@@ -197,6 +232,20 @@ describe('react-dom/server behavior comparisons', () => {
     );
   });
 
+  it('uses the current deferred value when no initial value is supplied', async () => {
+    const Comp = () => <p>{React.useDeferredValue('current')}</p>;
+    expect(renderToString(<Comp />)).toBe('<p>current</p>');
+    expect(await renderToMarkdownString(<Comp />)).toBe('current\n\n');
+  });
+
+  it('preserves a null deferred initial value', async () => {
+    const Comp = () => (
+      <p>{String(React.useDeferredValue<string | null>('current', null))}</p>
+    );
+    expect(renderToString(<Comp />)).toBe('<p>null</p>');
+    expect(await renderToMarkdownString(<Comp />)).toBe('null\n\n');
+  });
+
   it('waits for async Suspense content instead of returning the fallback', async () => {
     const value = new Promise<string>((resolve) =>
       setTimeout(() => resolve('Resolved content'), 10),
@@ -211,18 +260,38 @@ describe('react-dom/server behavior comparisons', () => {
     ).toBe('Resolved content\n\n');
   });
 
-  it('rejects errors inside Suspense instead of producing fallback Markdown', async () => {
+  it('strictly rejects errors inside Suspense instead of accepting the server fallback', async () => {
     const error = new Error('Async render failed');
     const Comp = (): React.ReactNode => {
       throw error;
     };
-    await expect(
-      renderToMarkdownString(
-        <React.Suspense fallback={<p>Loading</p>}>
-          <Comp />
-        </React.Suspense>,
-      ),
-    ).rejects.toBe(error);
+    const element = (
+      <React.Suspense fallback={<p>Loading</p>}>
+        <Comp />
+      </React.Suspense>
+    );
+    expect(renderToString(element)).toContain('<p>Loading</p>');
+    await expect(renderToMarkdownString(element)).rejects.toBe(error);
+  });
+
+  it('rejects when pending Suspense content fails asynchronously', async () => {
+    const error = new Error('Async render failed');
+    const value = createDeferredValue();
+    let fallbackRendered = false;
+    const Comp = () => <p>{React.use(value.promise)}</p>;
+    const Fallback = () => {
+      fallbackRendered = true;
+      return <p>Loading</p>;
+    };
+    const result = renderToMarkdownString(
+      <React.Suspense fallback={<Fallback />}>
+        <Comp />
+      </React.Suspense>,
+    );
+    const rejection = expect(result).rejects.toBe(error);
+    await waitForRender(() => fallbackRendered);
+    value.reject(error);
+    await rejection;
   });
 
   it('does not create imperative handles', async () => {
@@ -252,6 +321,7 @@ describe('react-dom/server behavior comparisons', () => {
 
   it('stops suspended retries after a caught error without interrupting another render', async () => {
     const calls: string[] = [];
+    const caughtErrors: { caught: Error; expected: Error }[] = [];
     const failedValue = createDeferredValue();
     const healthyValue = createDeferredValue();
     let failedFallbackRendered = false;
@@ -265,7 +335,8 @@ describe('react-dom/server behavior comparisons', () => {
         return { failed: true };
       }
       componentDidCatch(caught: Error) {
-        expect(caught).toBe(this.#error);
+        // Assert outside React's callback, where assertion failures propagate.
+        caughtErrors.push({ caught, expected: this.#error });
       }
       render() {
         return this.state.failed ? <p>Fallback</p> : this.props.children;
@@ -309,6 +380,9 @@ describe('react-dom/server behavior comparisons', () => {
       </React.Suspense>,
     );
     await expect(failed).rejects.toBe(error);
+    expect(caughtErrors).toHaveLength(1);
+    expect(caughtErrors[0].caught).toBe(error);
+    expect(caughtErrors[0].expected).toBe(error);
     await waitForRender(() => healthyFallbackRendered);
     expect(failedFallbackRendered).toBe(true);
     healthyValue.resolve('Healthy');

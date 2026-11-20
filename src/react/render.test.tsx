@@ -167,11 +167,6 @@ describe('renderToMarkdownString', () => {
     `);
   });
 
-  // Note: componentDidMount suppression is only available in React 19+.
-  // In React 18, class component lifecycle methods are invoked directly
-  // by the reconciler during commitLayoutEffects, not through the hooks
-  // dispatcher, so they cannot be intercepted.
-
   it('componentDidMount', async () => {
     class Base extends React.Component {
       state: Readonly<{ mounted: boolean }> = { mounted: false };
