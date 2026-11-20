@@ -426,6 +426,17 @@ export async function renderToMarkdownString(
 
     return await commitPromise;
   } finally {
-    removeInterceptor();
+    // A rejected render can still have suspended siblings and retry listeners.
+    // Unmount synchronously while hooks and commit callbacks remain suppressed.
+    container.onCommit = undefined;
+    try {
+      reconciler.updateContainerSync(null, root, null, null);
+      reconciler.flushSyncWork();
+      reconciler.flushPassiveEffects();
+    } finally {
+      container.restoreClientCommit?.();
+      container.restoreClientCommit = undefined;
+      removeInterceptor();
+    }
   }
 }

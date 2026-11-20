@@ -13,19 +13,75 @@ type HostContext = {
 };
 
 // React 19.2/19.3 commit flags used by the pinned reconciler 0.33.
-// Suppress mount/update lifecycle and ref work, without changing components.
+// Commit reveal/deletion paths call refs and class lifecycles without checking
+// flags. Mask them on Fibers for the commit, leaving user instances untouched.
 type CommitFiber = {
   tag: number;
   flags: number;
+  ref: unknown;
+  stateNode: unknown;
+  alternate: CommitFiber | null;
+  deletions: CommitFiber[] | null;
   child: CommitFiber | null;
   sibling: CommitFiber | null;
 };
-function suppressClientCommit(fiber: CommitFiber | null): void {
-  for (let node = fiber; node; node = node.sibling) {
+const clientClassLifecycles = new Set([
+  'componentDidMount',
+  'componentDidUpdate',
+  'componentWillUnmount',
+  'getSnapshotBeforeUpdate',
+]);
+
+function suppressClientCommit(fiber: CommitFiber | null): () => void {
+  const restorations: (() => void)[] = [];
+  const visited = new Set<CommitFiber>();
+  const suppress = (node: CommitFiber) => {
+    if (visited.has(node)) return;
+    visited.add(node);
     node.flags &= ~512; // Ref
-    if (node.tag === 1) node.flags &= ~4; // Class layout lifecycle
-    suppressClientCommit(node.child);
-  }
+    const ref = node.ref;
+    node.ref = null;
+    restorations.push(() => {
+      node.ref = ref;
+    });
+    if (node.tag === 1) {
+      node.flags &= ~(4 | 1024); // Class layout lifecycle and snapshot
+      const instance = node.stateNode as Record<string, unknown>;
+      const commitInstance = new Proxy(instance, {
+        get(target, prop) {
+          if (typeof prop === 'string' && clientClassLifecycles.has(prop)) {
+            return undefined;
+          }
+          const value = Reflect.get(target, prop, target);
+          // Error callbacks and any synchronous render retry must retain the
+          // original `this`, including access to private fields.
+          return typeof value === 'function' && prop !== 'constructor'
+            ? value.bind(target)
+            : value;
+        },
+        set(target, prop, value) {
+          return Reflect.set(target, prop, value, target);
+        },
+      });
+      node.stateNode = commitInstance;
+      restorations.push(() => {
+        // Passive deletion may already have detached this Fiber.
+        if (node.stateNode === commitInstance) node.stateNode = instance;
+      });
+    }
+  };
+  const traverse = (first: CommitFiber | null) => {
+    for (let node = first; node; node = node.sibling) {
+      suppress(node);
+      if (node.alternate) suppress(node.alternate);
+      for (const deleted of node.deletions ?? []) traverse(deleted);
+      traverse(node.child);
+    }
+  };
+  traverse(fiber);
+  return () => {
+    for (const restore of restorations) restore();
+  };
 }
 
 // Text node class
@@ -48,6 +104,7 @@ export class MarkdownNode {
   hidden = false;
   onCommit?: () => void;
   renderRoot?: { current: { alternate: CommitFiber | null } };
+  restoreClientCommit?: () => void;
   public type: string;
   public props: Record<string, unknown>;
   public children: (MarkdownNode | TextNode)[];
@@ -243,7 +300,19 @@ const hostConfig: createReconciler.HostConfig<
     return instance;
   },
   prepareForCommit(containerInfo: MarkdownNode): null {
-    suppressClientCommit(containerInfo.renderRoot?.current.alternate ?? null);
+    containerInfo.restoreClientCommit?.();
+    const restore = suppressClientCommit(
+      containerInfo.renderRoot?.current.alternate ?? null,
+    );
+    containerInfo.restoreClientCommit = restore;
+    // resetAfterCommit runs before layout effects. Restore only once React has
+    // finished the entire synchronous commit, including Suspense reveal work.
+    queueMicrotask(() => {
+      if (containerInfo.restoreClientCommit === restore) {
+        restore();
+        containerInfo.restoreClientCommit = undefined;
+      }
+    });
     return null;
   },
   resetAfterCommit(containerInfo: MarkdownNode): void {

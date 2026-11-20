@@ -4,6 +4,19 @@ import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { renderToMarkdownString } from './render';
 
+function createDeferredValue() {
+  let resolve!: (value: string) => void;
+  const promise = new Promise<string>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+async function waitForRender(rendered: () => boolean) {
+  await expect.poll(rendered).toBe(true);
+  await setImmediate();
+}
+
 describe('react-dom/server behavior comparisons', () => {
   it('rejects transition and optimistic updates during server rendering', async () => {
     const Transition = () => {
@@ -92,6 +105,77 @@ describe('react-dom/server behavior comparisons', () => {
     expect(calls).toEqual([]);
   });
 
+  it('does not run client callbacks when Suspense reveals content or removes fallback', async () => {
+    const calls: string[] = [];
+    const classRef = React.createRef<Content>();
+    const hostRef = React.createRef<HTMLParagraphElement>();
+    const value = createDeferredValue();
+    let fallbackRendered = false;
+    let instance: Content | undefined;
+    class Content extends React.Component<{ children: React.ReactNode }> {
+      #content = 'Ready';
+      constructor(props: { children: React.ReactNode }) {
+        super(props);
+        instance = this;
+      }
+      componentDidMount() {
+        calls.push('mount');
+      }
+      componentWillUnmount() {
+        calls.push('content unmount');
+      }
+      render() {
+        return (
+          <p ref={hostRef}>
+            <span
+              ref={() => {
+                calls.push('content ref');
+              }}
+            >
+              {this.#content}:{this.props.children}
+            </span>
+          </p>
+        );
+      }
+    }
+    class Fallback extends React.Component {
+      componentWillUnmount() {
+        calls.push('fallback unmount');
+      }
+      render() {
+        fallbackRendered = true;
+        return (
+          <p
+            ref={() => {
+              calls.push('fallback ref');
+            }}
+          >
+            Loading
+          </p>
+        );
+      }
+    }
+    const Async = () => (
+      <Content ref={classRef}>{React.use(value.promise)}</Content>
+    );
+    const element = (
+      <React.Suspense fallback={<Fallback />}>
+        <Async />
+      </React.Suspense>
+    );
+    const result = renderToMarkdownString(element);
+    await waitForRender(() => fallbackRendered);
+    value.resolve('content');
+    expect(await result).toBe('Ready:content\n\n');
+    expect(classRef.current).toBeNull();
+    expect(hostRef.current).toBeNull();
+    expect(instance?.componentDidMount).toBe(
+      Content.prototype.componentDidMount,
+    );
+    await setImmediate();
+    expect(calls).toEqual([]);
+  });
+
   it('uses server values for transition, deferred, optimistic and action state hooks', async () => {
     const Comp = () => {
       const [pending] = React.useTransition();
@@ -164,5 +248,76 @@ describe('react-dom/server behavior comparisons', () => {
     };
     expect(() => renderToString(<Comp />)).toThrow(error);
     await expect(renderToMarkdownString(<Comp />)).rejects.toBe(error);
+  });
+
+  it('stops suspended retries after a caught error without interrupting another render', async () => {
+    const calls: string[] = [];
+    const failedValue = createDeferredValue();
+    const healthyValue = createDeferredValue();
+    let failedFallbackRendered = false;
+    let healthyFallbackRendered = false;
+    let failedRenders = 0;
+    const error = new Error('Broken');
+    class Boundary extends React.Component<{ children: React.ReactNode }> {
+      #error = error;
+      state = { failed: false };
+      static getDerivedStateFromError() {
+        return { failed: true };
+      }
+      componentDidCatch(caught: Error) {
+        expect(caught).toBe(this.#error);
+      }
+      render() {
+        return this.state.failed ? <p>Fallback</p> : this.props.children;
+      }
+    }
+    const Broken = (): React.ReactNode => {
+      throw error;
+    };
+    const Async = ({ failed }: { failed: boolean }) => {
+      if (failed) failedRenders++;
+      const text = React.use(
+        failed ? failedValue.promise : healthyValue.promise,
+      );
+      React.useEffect(() => {
+        calls.push('effect');
+      }, []);
+      React.useImperativeHandle(React.useRef<object | null>(null), () => {
+        calls.push('handle');
+        return {};
+      });
+      return <p>{text}</p>;
+    };
+    const Fallback = ({ failed }: { failed: boolean }) => {
+      if (failed) failedFallbackRendered = true;
+      else healthyFallbackRendered = true;
+      return <p>Loading</p>;
+    };
+    const failed = renderToMarkdownString(
+      <>
+        <Boundary>
+          <Broken />
+        </Boundary>
+        <React.Suspense fallback={<Fallback failed />}>
+          <Async failed />
+        </React.Suspense>
+      </>,
+    );
+    const healthy = renderToMarkdownString(
+      <React.Suspense fallback={<Fallback failed={false} />}>
+        <Async failed={false} />
+      </React.Suspense>,
+    );
+    await expect(failed).rejects.toBe(error);
+    await waitForRender(() => healthyFallbackRendered);
+    expect(failedFallbackRendered).toBe(true);
+    healthyValue.resolve('Healthy');
+    expect(await healthy).toBe('Healthy\n\n');
+    const rendersBeforeResolve = failedRenders;
+    failedValue.resolve('Failed sibling');
+    await setImmediate();
+    await setImmediate();
+    expect(failedRenders).toBe(rendersBeforeResolve);
+    expect(calls).toEqual([]);
   });
 });
