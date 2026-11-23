@@ -200,14 +200,20 @@ function getBlockSeparator(
   return '\n\n';
 }
 
-function childToMarkdown(child: MarkdownNode | TextNode): string {
+function childToMarkdown(
+  child: MarkdownNode | TextNode,
+  options: RenderToMarkdownOptions,
+): string {
   if (child instanceof TextNode) {
     return child.text;
   }
-  return toMarkdown(child);
+  return toMarkdown(child, options);
 }
 
-function renderChildren(root: MarkdownNode): string {
+function renderChildren(
+  root: MarkdownNode,
+  options: RenderToMarkdownOptions,
+): string {
   const { children } = root;
 
   if (children.length === 0) {
@@ -220,7 +226,7 @@ function renderChildren(root: MarkdownNode): string {
   let previousMarkdown = '';
 
   for (const child of children) {
-    const markdown = childToMarkdown(child);
+    const markdown = childToMarkdown(child, options);
     const separator =
       shouldSeparateBlocks && previousChild
         ? getBlockSeparator(previousChild, child, previousMarkdown, markdown)
@@ -241,12 +247,99 @@ function renderChildren(root: MarkdownNode): string {
   return parts.join('');
 }
 
+/** A snapshot of a host node after React has resolved components. */
+export type ResolvedMarkdownNode =
+  | { readonly type: 'text'; readonly value: string }
+  | {
+      readonly type: 'element';
+      readonly name: string;
+      readonly props: Readonly<Record<string, unknown>>;
+      readonly children: readonly ResolvedMarkdownNode[];
+    };
+
+export interface MarkdownSerializationContext {
+  /** Serialize a resolved subtree, applying the custom serializer. */
+  serialize(node: ResolvedMarkdownNode): string;
+  /** Use the built-in serializer for this node, retaining child overrides. */
+  defaultSerialize(node: ResolvedMarkdownNode): string;
+}
+
+export interface RenderToMarkdownOptions {
+  /**
+   * Optionally serialize resolved host nodes. Return undefined to retain the
+   * built-in behavior. Components still execute in their normal React tree.
+   * This hook runs after commit; it must not call React hooks or mutate nodes.
+   */
+  serializers?: Readonly<
+    Record<
+      string,
+      (
+        node: ResolvedMarkdownNode,
+        context: MarkdownSerializationContext,
+      ) => string | undefined
+    >
+  >;
+}
+
+function snapshot(
+  node: MarkdownNode | TextNode,
+  originals: WeakMap<ResolvedMarkdownNode, MarkdownNode | TextNode>,
+): ResolvedMarkdownNode {
+  if (node instanceof TextNode) {
+    const result = { type: 'text', value: node.text } as const;
+    originals.set(result, node);
+    return result;
+  }
+  const { children: _children, ...props } = node.props;
+  const result = {
+    type: 'element',
+    name: node.type,
+    props,
+    children: node.children.map((child) => snapshot(child, originals)),
+  } as const;
+  originals.set(result, node);
+  return result;
+}
+
+function restore(node: ResolvedMarkdownNode): MarkdownNode | TextNode {
+  if (node.type === 'text') return new TextNode(node.value);
+  const result = new MarkdownNode(node.name, { ...node.props });
+  for (const child of node.children) result.appendChild(restore(child));
+  return result;
+}
+
 // Convert node tree to Markdown string
-function toMarkdown(root: MarkdownNode): string {
+function toMarkdown(
+  root: MarkdownNode,
+  options: RenderToMarkdownOptions = {},
+  useOverride = true,
+): string {
+  const serializer = options.serializers?.[root.type];
+  if (useOverride && serializer) {
+    const originals = new WeakMap<
+      ResolvedMarkdownNode,
+      MarkdownNode | TextNode
+    >();
+    const resolved = snapshot(root, originals);
+    const serialize = (
+      node: ResolvedMarkdownNode,
+      override: boolean,
+    ): string => {
+      const restored = originals.get(node) ?? restore(node);
+      return restored instanceof TextNode
+        ? restored.text
+        : toMarkdown(restored, options, override);
+    };
+    const result = serializer(resolved, {
+      serialize: (node) => serialize(node, true),
+      defaultSerialize: (node) => serialize(node, false),
+    });
+    if (result !== undefined) return result;
+  }
   const { type, props, children } = root;
 
   // Get children's Markdown lazily so ignored nodes do not serialize children.
-  const getChildrenMarkdown = () => renderChildren(root);
+  const getChildrenMarkdown = () => renderChildren(root, options);
 
   // Generate corresponding Markdown based on element type
   switch (type) {
@@ -326,7 +419,7 @@ function toMarkdown(root: MarkdownNode): string {
     case 'tr': {
       const cells = children
         .filter((child): child is MarkdownNode => child instanceof MarkdownNode)
-        .map((cell) => toMarkdown(cell).trim());
+        .map((cell) => toMarkdown(cell, options).trim());
 
       // If it's a header row, add separator
       if (root.parent && root.parent.type === 'thead') {
@@ -347,6 +440,7 @@ function toMarkdown(root: MarkdownNode): string {
 // Render function (SSR-like behavior: neither useEffect nor useLayoutEffect run)
 export async function renderToMarkdownString(
   element: React.ReactElement,
+  options: RenderToMarkdownOptions = {},
 ): Promise<string> {
   const container = new MarkdownNode('root');
 
@@ -380,14 +474,20 @@ export async function renderToMarkdownString(
   try {
     // Set up a promise that resolves when commit completes
     let resolveCommit: ((arg: string) => void) | null = null;
-    const commitPromise = new Promise<string>((resolve) => {
+    let rejectCommit: (error: unknown) => void;
+    const commitPromise = new Promise<string>((resolve, reject) => {
       resolveCommit = resolve;
+      rejectCommit = reject;
     });
 
     reconciler.updateContainer(element, root, null, () => {
       // This callback is called after commit
       if (resolveCommit) {
-        resolveCommit(toMarkdown(container));
+        try {
+          resolveCommit(toMarkdown(container, options));
+        } catch (error) {
+          rejectCommit(error);
+        }
       }
     });
 

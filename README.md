@@ -142,3 +142,30 @@ Any unrecognized elements (e.g. `<div>`, `<span>`, `<section>`) render their chi
 ## License
 
 [MIT](./LICENSE)
+
+### Custom serialization of resolved nodes
+
+`renderToMarkdownString(element, { serializers })` optionally overrides named
+host elements after React resolves their components. Omitting this option keeps
+the existing Markdown output. A serializer returns `undefined` to delegate, or a
+string to replace that element's output:
+
+```tsx
+await renderToMarkdownString(<section><Article /></section>, {
+  serializers: {
+    section(node, context) {
+      return context.defaultSerialize(node);
+    },
+  },
+});
+```
+
+The callback receives a resolved tree of `element` nodes (`name`, `props`, and
+`children`) and `text` nodes (`value`). `props` omits the original React
+`children`; use the resolved `children` instead. `context.serialize(node)` applies
+custom serializers, while `context.defaultSerialize(node)` uses the built-in
+serializer for that node and still applies overrides to its descendants.
+Callbacks run after commit and must not call Hooks or mutate nodes. Components
+retain normal Context, Hooks, and parent-child execution; serializers do not
+execute components a second time. A thrown serializer error rejects the render
+promise. Options belong to one render call and are safe to use concurrently.
