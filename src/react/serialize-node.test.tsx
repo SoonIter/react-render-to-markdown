@@ -71,6 +71,21 @@ describe('resolved host-node serializers', () => {
     ).toBe('Hello\n\n');
   });
 
+  it('retains parent context when delegating an existing node', async () => {
+    const tree = (
+      <ol>
+        <li>first</li>
+        <li>second</li>
+      </ol>
+    );
+    const expected = await renderToMarkdownString(tree);
+    expect(
+      await renderToMarkdownString(tree, {
+        serializers: { li: (node, context) => context.defaultSerialize(node) },
+      }),
+    ).toBe(expected);
+  });
+
   it('preserves ownership when a parent duplicates or suppresses children', async () => {
     function Twice({ children }: { children: React.ReactNode }) {
       return (
